@@ -1,0 +1,6 @@
+{
+  "name": "Daily Islamic Routine — ইসলামিক ডেইলি রুটিন ও কুরআন",
+  "description": "দৈনিক ইসলামিক রুটিন, নামাজের সময়সূচি, কুরআন মাজীদ তিলাওয়াত ও বাংলা অনুবাদ, সহীহ হাদিস, সকাল-সন্ধ্যার আমল, ৩৩ আয়াত এবং রুকাইয়া শারইয়াহ অডিও ও ভিজ্যুয়াল প্লেয়ার।",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

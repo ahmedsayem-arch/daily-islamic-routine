@@ -1,0 +1,157 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Hind Siliguri', system-ui, -apple-system, sans-serif;
+    --font-arabic: 'Scheherazade New', 'Amiri Quran', 'Amiri', serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+.font-arabic {
+  font-family: var(--font-arabic);
+  line-height: 2.15;
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle Islamic 8-point geometric lattice overlay */
+.bg-islamic-lattice {
+  background-image: url("data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23E7C57B' stroke-width='0.65' stroke-opacity='0.11'%3E%3Cpath d='M32 4l8 20 20 8-20 8-8 20-8-20-20-8 20-8z'/%3E%3Crect x='14' y='14' width='36' height='36'/%3E%3Crect x='14' y='14' width='36' height='36' transform='rotate(45 32 32)'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* -----------------------------------------------------------
+   4 Balanced, Natural App Themes:
+   1. daylight  (দিবালোক · Clean Mineral Light)
+   2. cream     (ক্রিম · কুরআনের পাতার মতো উষ্ণ প্যাপিরাস)
+   3. emerald   (পান্না সবুজ · Calm Deep Slate-Emerald)
+   4. tahajjud  (তাহাজ্জুদ ডার্ক · Smooth Night Charcoal)
+----------------------------------------------------------- */
+
+/* Daylight (Default Light) */
+.bg-sanctuary-canvas {
+  background-color: #F6F8F7;
+  background-image:
+    radial-gradient(at 15% 0%, rgba(13, 110, 82, 0.045) 0px, transparent 50%),
+    radial-gradient(at 85% 5%, rgba(200, 150, 62, 0.05) 0px, transparent 45%);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(15, 31, 26, 0.08);
+  box-shadow: 0 8px 28px rgba(6, 40, 32, 0.04);
+}
+
+/* Cream (Mushaf Quran Page Parchment) */
+html[data-theme='cream'] body {
+  background-color: #F7F0DF;
+  color: #271C10;
+}
+
+html[data-theme='cream'] .bg-sanctuary-canvas {
+  background-color: #F7F0DF;
+  background-image:
+    radial-gradient(at 18% 0%, rgba(200, 150, 62, 0.09) 0px, transparent 55%),
+    radial-gradient(at 85% 10%, rgba(180, 118, 37, 0.07) 0px, transparent 50%);
+}
+
+html[data-theme='cream'] .glass-card {
+  background: #FFFDF7;
+  border: 1px solid rgba(180, 118, 37, 0.18);
+  box-shadow: 0 8px 26px rgba(124, 77, 18, 0.06);
+}
+
+html[data-theme='cream'] .app-chrome-bar {
+  background-color: rgba(250, 244, 229, 0.94);
+  border-color: rgba(180, 118, 37, 0.18);
+}
+
+/* Emerald (Calm Botanical Slate-Emerald) */
+html[data-theme='emerald'] body {
+  background-color: #061512;
+  color: #EFF4F2;
+}
+
+html[data-theme='emerald'] .bg-sanctuary-canvas {
+  background-color: #061512;
+  background-image:
+    radial-gradient(at 18% 0%, rgba(16, 118, 88, 0.22) 0px, transparent 52%),
+    radial-gradient(at 85% 4%, rgba(212, 168, 83, 0.10) 0px, transparent 46%),
+    radial-gradient(at 50% 100%, rgba(9, 54, 43, 0.22) 0px, transparent 60%);
+}
+
+html[data-theme='emerald'] .glass-card {
+  background: linear-gradient(180deg, rgba(13, 33, 28, 0.90) 0%, rgba(8, 22, 18, 0.95) 100%);
+  border: 1px solid rgba(231, 197, 123, 0.14);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+}
+
+html[data-theme='emerald'] .app-chrome-bar {
+  background-color: rgba(6, 21, 18, 0.90);
+  border-color: rgba(231, 197, 123, 0.12);
+}
+
+/* Tahajjud Dark (Smooth Night Charcoal) */
+html[data-theme='tahajjud'] body {
+  background-color: #090C0B;
+  color: #EFF3F1;
+}
+
+html[data-theme='tahajjud'] .bg-sanctuary-canvas {
+  background-color: #090C0B;
+  background-image:
+    radial-gradient(at 20% 0%, rgba(16, 78, 62, 0.10) 0px, transparent 52%),
+    radial-gradient(at 85% 4%, rgba(212, 168, 83, 0.06) 0px, transparent 46%);
+}
+
+html[data-theme='tahajjud'] .glass-card {
+  background: #111615;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.44);
+}
+
+html[data-theme='tahajjud'] .app-chrome-bar {
+  background-color: rgba(9, 12, 11, 0.92);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 168, 83, 0.28);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 168, 83, 0.5);
+}
