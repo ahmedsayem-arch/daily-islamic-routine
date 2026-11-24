@@ -844,7 +844,6 @@ export default function App() {
                 selectedQari={selectedQari}
                 onChangeQari={handleChangeQari}
                 activeTrackKey={activeTrackKey}
-                activeTrack={currentTrack}
                 isPlaying={isPlaying}
                 settings={appSettings}
                 favoriteAyahs={favoriteAyahs}
@@ -857,8 +856,6 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onPlayPlaylist={handlePlayPlaylist}
                 onTogglePlay={handleTogglePlay}
-                onPrevTrack={handlePrev}
-                onNextTrack={handleNext}
               />
             )}
 
@@ -879,7 +876,6 @@ export default function App() {
                 selectedQari={selectedQari}
                 audioStatus={audioStatus}
                 activeTrackKey={activeTrackKey}
-                activeTrack={currentTrack}
                 activeTrackTitle={currentTrack?.titleBn}
                 isPlaying={isPlaying}
                 settings={appSettings}
@@ -888,8 +884,6 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onPlayPlaylist={handlePlayPlaylist}
                 onTogglePlay={handleTogglePlay}
-                onPrevTrack={handlePrev}
-                onNextTrack={handleNext}
                 onOpenVisualPlayer={() => setIsVisualOpen(true)}
               />
             )}
@@ -1040,7 +1034,11 @@ export default function App() {
       />
 
       {/* Digital Tasbih Modal */}
-      <TasbihModal isOpen={isTasbihOpen} onClose={() => setIsTasbihOpen(false)} />
+      <TasbihModal
+        isOpen={isTasbihOpen}
+        onClose={() => setIsTasbihOpen(false)}
+        apiHijriParts={schedule.hijriParts}
+      />
 
       {/* Floating Speech Narration Mini Dock (Hadith, Seerah, Azkar) */}
       {speechSnap.status !== 'idle' && speechSnap.currentTrack && (

@@ -241,10 +241,19 @@ export interface IslamHouseBookItem {
   sourceLabelBn: string;
 }
 
+export interface TasbihFazilatPoint {
+  countBadgeBn: string;
+  detailBn: string;
+  referenceBn: string;
+}
+
 export interface TasbihPreset {
   id: string;
   arabic: string;
   labelBn: string;
   meaningBn: string;
   defaultTarget: number;
+  recommendedCountsBn: string;
+  fazilatPointsBn: TasbihFazilatPoint[];
+  hisnulReferenceBn: string;
 }

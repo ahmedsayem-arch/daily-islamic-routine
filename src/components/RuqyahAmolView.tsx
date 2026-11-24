@@ -5,10 +5,8 @@ import {
   BookMarked,
   BookOpen,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
   Compass,
   Download,
   Headphones,
@@ -17,13 +15,10 @@ import {
   Mic,
   Moon,
   Pause,
-  Pin,
   Play,
   Radio,
   RotateCcw,
   Search,
-  SkipBack,
-  SkipForward,
   Sparkles,
   Sun,
   Volume2,
@@ -53,7 +48,7 @@ import {
 } from '../utils/offlineAudioCache';
 import { TAJWEED_COLOR_CLASSES, TAJWEED_LEGEND } from '../utils/quranFormatting';
 import { speechPlayer, useSpeechPlayer } from '../utils/speechPlayer';
-import { SmoothStage, SmoothSwap } from './SmoothTransition';
+import { SmoothStage } from './SmoothTransition';
 import { TajweedArabicText } from './TajweedArabicText';
 import { VoiceSelectorSection } from './VoiceSelectorSection';
 
@@ -61,7 +56,6 @@ interface RuqyahAmolViewProps {
   selectedQari: QariReciter;
   audioStatus: AudioStatus;
   activeTrackKey?: string | null;
-  activeTrack?: AudioTrackItem | null;
   activeTrackTitle?: string;
   isPlaying: boolean;
   settings: AppSettings;
@@ -74,8 +68,6 @@ interface RuqyahAmolViewProps {
   onUpdateSettings?: (patch: Partial<AppSettings>) => void;
   onPlayPlaylist: (tracks: AudioTrackItem[], startIndex: number, openVisual?: boolean) => void;
   onTogglePlay: () => void;
-  onPrevTrack?: () => void;
-  onNextTrack?: () => void;
   onOpenVisualPlayer: () => void;
 }
 
@@ -196,7 +188,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   selectedQari,
   audioStatus,
   activeTrackKey = null,
-  activeTrack = null,
   activeTrackTitle,
   isPlaying,
   settings,
@@ -205,8 +196,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   onUpdateSettings,
   onPlayPlaylist,
   onTogglePlay,
-  onPrevTrack,
-  onNextTrack,
   onOpenVisualPlayer,
 }) => {
   const [subTab, setSubTab] = useState<SubTab>(routeIntent?.subTab || 'ruqyah');
@@ -241,7 +230,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
   const [amolImgFailed, setAmolImgFailed] = useState(false);
-  const [pinCollapsed, setPinCollapsed] = useState(false);
   const [autoFollowAyah, setAutoFollowAyah] = useState(true);
   const ayahElementRefs = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -434,14 +422,23 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
     };
   }, [subTab, activeRuqyahProgram, ruqyahTracks, manzilReaderOpen, manzilTracks]);
 
-  // Smoothly auto-scroll to active Ayah inside Quran-style Ruqyah / Manzil reader
+  // Smoothly auto-scroll active Ayah cleanly to the top inside Quran-style Ruqyah / Manzil reader
   useEffect(() => {
-    if (!autoFollowAyah || !activeTrackKey) return;
+    if (!autoFollowAyah || !activeTrackKey || ruqyahLoading || manzilLoading) return;
     const el = ayahElementRefs.current.get(activeTrackKey);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [activeTrackKey, autoFollowAyah, ruqyahTracks.length, manzilTracks.length]);
+  }, [
+    activeTrackKey,
+    autoFollowAyah,
+    ruqyahTracks.length,
+    manzilTracks.length,
+    ruqyahLoading,
+    manzilLoading,
+    ruqyahReaderStyle,
+    manzilReaderStyle,
+  ]);
 
   const handleOpenRuqyahReader = (programId: string) => {
     setSelectedRuqyahId(programId);
@@ -560,14 +557,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   );
 
   const audioStatusText = getAudioStatusSummary(audioStatus, activeTrackTitle);
-
-  const activeSpeechAzkar = useMemo(() => {
-    if (speechSnap.status === 'idle' || !speechSnap.currentTrack?.id.startsWith('azkar-speech-')) {
-      return null;
-    }
-    const azkarId = speechSnap.currentTrack.id.replace('azkar-speech-', '');
-    return AZKAR_LIST.find((a) => a.id === azkarId) || null;
-  }, [speechSnap.status, speechSnap.currentTrack]);
 
   const handleOpenHisnulChapter = (chapterId: HisnulChapterId) => {
     setHisnulChapter(chapterId);
@@ -795,36 +784,50 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                 </button>
               </div>
 
-              {onUpdateSettings && (
-                <div className="flex items-center gap-2 text-xs text-[#475A53] dark:text-[#9BB0A8]">
-                  <span>আরবি সাইজ:</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onUpdateSettings({
-                        arabicFontSize: Math.max(20, settings.arabicFontSize - 2),
-                      })
-                    }
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white/80 font-bold text-[#0F1F1A] dark:border-white/10 dark:bg-white/[0.05] dark:text-white"
-                    aria-label="ফন্ট ছোট করুন"
-                  >
-                    -
-                  </button>
-                  <span className="font-mono-num w-6 text-center">{settings.arabicFontSize}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onUpdateSettings({
-                        arabicFontSize: Math.min(42, settings.arabicFontSize + 2),
-                      })
-                    }
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white/80 font-bold text-[#0F1F1A] dark:border-white/10 dark:bg-white/[0.05] dark:text-white"
-                    aria-label="ফন্ট বড় করুন"
-                  >
-                    +
-                  </button>
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2 text-xs text-[#475A53] dark:text-[#9BB0A8]">
+                <button
+                  type="button"
+                  onClick={() => setAutoFollowAyah((v) => !v)}
+                  className={`min-h-[32px] rounded-lg border px-2.5 text-[11px] font-bold transition-colors ${
+                    autoFollowAyah
+                      ? 'border-[#0D6E52] bg-[#0D6E52]/12 text-[#063D34] dark:border-[#6EE7B7]/45 dark:bg-[#0D6E52]/35 dark:text-[#E8FFF6]'
+                      : 'border-black/10 bg-white/80 text-[#475A53] dark:border-white/10 dark:bg-white/[0.04] dark:text-[#9BB0A8]'
+                  }`}
+                  title="তিলাওয়াতের সাথে চলমান আয়াত সবসময় উপরে রাখুন"
+                >
+                  {autoFollowAyah ? 'অটো-স্ক্রল চালু' : 'অটো-স্ক্রল বন্ধ'}
+                </button>
+                {onUpdateSettings && (
+                  <>
+                    <span>আরবি সাইজ:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          arabicFontSize: Math.max(20, settings.arabicFontSize - 2),
+                        })
+                      }
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white/80 font-bold text-[#0F1F1A] dark:border-white/10 dark:bg-white/[0.05] dark:text-white"
+                      aria-label="ফন্ট ছোট করুন"
+                    >
+                      -
+                    </button>
+                    <span className="font-mono-num w-6 text-center">{settings.arabicFontSize}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          arabicFontSize: Math.min(42, settings.arabicFontSize + 2),
+                        })
+                      }
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white/80 font-bold text-[#0F1F1A] dark:border-white/10 dark:bg-white/[0.05] dark:text-white"
+                      aria-label="ফন্ট বড় করুন"
+                    >
+                      +
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             {onUpdateSettings &&
@@ -951,11 +954,9 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                               else onPlayPlaylist(tracks, idx, false);
                             }
                           }}
-                          className={`${
-                            pinCollapsed ? 'scroll-mt-36' : 'scroll-mt-80'
-                          } inline cursor-pointer rounded-lg px-1 transition-colors ${
+                          className={`scroll-mt-24 inline cursor-pointer rounded-lg px-1 transition-all duration-300 ${
                             isThisTrack
-                              ? 'bg-[#D4A853]/25 text-[#063D34] dark:bg-[#D4A853]/25 dark:text-[#F6DC9B]'
+                              ? 'bg-[#0D6E52]/12 text-[#063D34] ring-1 ring-[#0D6E52]/20 dark:bg-[#D4A853]/20 dark:text-[#F6DC9B] dark:ring-[#E7C57B]/25'
                               : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.05]'
                           }`}
                           title={`${tr.titleBn} শুনতে ট্যাপ করুন`}
@@ -1001,17 +1002,26 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                             if (el) ayahElementRefs.current.set(pairKey, el);
                             else ayahElementRefs.current.delete(pairKey);
                           }}
-                          className={`${
-                            pinCollapsed ? 'scroll-mt-36' : 'scroll-mt-80'
-                          } py-5 transition-colors ${
+                          className={`scroll-mt-20 py-5 transition-all duration-300 ${
                             isThisTrack
-                              ? 'rounded-2xl bg-gradient-to-r from-[#0D6E52]/10 to-[#D4A853]/10 px-4'
+                              ? 'rounded-2xl border-l-4 border-l-[#0D6E52] bg-[#0D6E52]/[0.05] px-4 ring-1 ring-[#0D6E52]/12 dark:border-l-[#E7C57B] dark:bg-[#0D6E52]/15 dark:ring-[#E7C57B]/20'
                               : ''
                           }`}
                         >
                           <div className="mb-3 flex items-center justify-between gap-2">
-                            <span className="font-mono-num text-xs font-bold text-[#0D6E52] dark:text-[#E7C57B]">
-                              {tr.titleBn} ({tr.surah}:{tr.ayah})
+                            <span className="font-mono-num inline-flex items-center gap-2 text-xs font-bold text-[#0D6E52] dark:text-[#E7C57B]">
+                              {isThisTrack && (
+                                <span
+                                  className={`h-2 w-2 rounded-full ${
+                                    isPlaying
+                                      ? 'animate-pulse bg-[#0D6E52] dark:bg-[#6EE7B7]'
+                                      : 'bg-[#D4A853]'
+                                  }`}
+                                />
+                              )}
+                              <span>
+                                {tr.titleBn} ({tr.surah}:{tr.ayah})
+                              </span>
                             </span>
 
                             <button
@@ -1101,244 +1111,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
 
   return (
     <div className="space-y-5">
-      {/* Sticky Top Pinned Active Ayah / Azkar Card: Always stays visible at the top during recitation */}
-      {activeTrack ? (
-        <section
-          aria-label="চলমান রুকাইয়া ও আয়াত"
-          className="sticky top-[68px] z-20 overflow-hidden rounded-2xl border border-[#D4A853]/45 bg-[#063D34]/95 text-white shadow-[0_14px_34px_rgba(4,24,19,0.35)] backdrop-blur-xl"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/12 px-3.5 py-2.5 sm:px-4">
-            <button
-              type="button"
-              onClick={() => {
-                const el = activeTrackKey ? ayahElementRefs.current.get(activeTrackKey) : null;
-                if (el) {
-                  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }
-              }}
-              className="flex min-w-0 items-center gap-2 text-left"
-              title="চলমান আয়াতে যান"
-            >
-              <span
-                className={`flex h-2.5 w-2.5 shrink-0 rounded-full ${
-                  isPlaying ? 'animate-pulse bg-[#6EE7B7]' : 'bg-[#F6DC9B]'
-                }`}
-              />
-              <Pin className="h-3.5 w-3.5 shrink-0 text-[#F6DC9B]" />
-              <div className="min-w-0">
-                <p className="truncate text-xs font-bold text-[#F6DC9B]">
-                  {activeTrack.titleBn}
-                </p>
-                <p className="truncate text-[10px] text-[#CBE2DA]">
-                  {activeTrack.subtitleBn}
-                </p>
-              </div>
-            </button>
-
-            <div className="flex shrink-0 items-center gap-1">
-              {onPrevTrack && (
-                <button
-                  type="button"
-                  onClick={onPrevTrack}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/85 hover:bg-white/12"
-                  aria-label="পূর্ববর্তী আয়াত"
-                >
-                  <SkipBack className="h-3.5 w-3.5" />
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={onTogglePlay}
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#E7C57B] to-[#C8963E] text-[#041D18]"
-                aria-label={isPlaying ? 'বিরতি' : 'চালু করুন'}
-              >
-                {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-              </button>
-
-              {onNextTrack && (
-                <button
-                  type="button"
-                  onClick={onNextTrack}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/85 hover:bg-white/12"
-                  aria-label="পরবর্তী আয়াত"
-                >
-                  <SkipForward className="h-3.5 w-3.5" />
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setAutoFollowAyah((v) => !v)}
-                className={`ml-1 rounded-lg border px-2 py-1 text-[10px] font-bold transition-colors ${
-                  autoFollowAyah
-                    ? 'border-[#6EE7B7]/45 bg-[#0D6E52] text-[#E8FFF6]'
-                    : 'border-white/20 bg-white/10 text-[#CBE2DA]'
-                }`}
-                title="আয়াত পরিবর্তনের সাথে স্বয়ংক্রিয় স্ক্রল"
-              >
-                {autoFollowAyah ? 'অটো-স্ক্রল' : 'স্ক্রল বন্ধ'}
-              </button>
-
-              <button
-                type="button"
-                onClick={onOpenVisualPlayer}
-                className="flex h-8 items-center gap-1 rounded-lg border border-white/20 bg-white/10 px-2 text-[10px] font-bold text-[#F6DC9B] hover:bg-white/20"
-                title="ভিজ্যুয়াল মোড"
-              >
-                <Maximize2 className="h-3 w-3" />
-                <span className="hidden sm:inline">ভিজ্যুয়াল</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPinCollapsed((c) => !c)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#F6DC9B] hover:bg-white/12"
-                aria-label={pinCollapsed ? 'আয়াত বড় করে দেখুন' : 'আয়াত ছোট করুন'}
-              >
-                {pinCollapsed ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronUp className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          {!pinCollapsed && (
-            <div className="max-h-52 overflow-y-auto px-4 py-3 sm:px-5">
-              <SmoothSwap itemKey={activeTrack.id} className="space-y-2">
-                {settings.showArabic && activeTrack.arabic && (
-                  <TajweedArabicText
-                    plainArabic={activeTrack.arabic}
-                    tajweedArabic={activeTrack.tajweedArabic}
-                    enableTajweed={settings.tajweedColorCoding}
-                    className="font-arabic text-right text-white"
-                    style={{
-                      fontSize: `${Math.min(30, Math.max(20, settings.arabicFontSize - 2))}px`,
-                      lineHeight: 2.0,
-                    }}
-                  />
-                )}
-
-                {settings.showBengaliTransliteration && activeTrack.bengaliTranslit && (
-                  <p className="text-xs font-medium leading-relaxed text-[#6EE7B7]">
-                    {activeTrack.bengaliTranslit}
-                  </p>
-                )}
-
-                {settings.showBengaliTranslation && activeTrack.meaningBn && (
-                  <p className="text-xs leading-relaxed text-[#E2EFEA] sm:text-sm">
-                    {activeTrack.meaningBn}
-                  </p>
-                )}
-              </SmoothSwap>
-            </div>
-          )}
-        </section>
-      ) : activeSpeechAzkar ? (
-        <section
-          aria-label="চলমান হিসনুল মুসলিম যিকির"
-          className="sticky top-[68px] z-20 overflow-hidden rounded-2xl border border-[#D4A853]/45 bg-[#063D34]/95 text-white shadow-[0_14px_34px_rgba(4,24,19,0.35)] backdrop-blur-xl"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/12 px-3.5 py-2.5 sm:px-4">
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                className={`flex h-2.5 w-2.5 shrink-0 rounded-full ${
-                  speechSnap.status === 'playing'
-                    ? 'animate-pulse bg-[#6EE7B7]'
-                    : 'bg-[#F6DC9B]'
-                }`}
-              />
-              <Pin className="h-3.5 w-3.5 shrink-0 text-[#F6DC9B]" />
-              <div className="min-w-0">
-                <p className="truncate text-xs font-bold text-[#F6DC9B]">
-                  {activeSpeechAzkar.titleBn}
-                </p>
-                <p className="truncate text-[10px] text-[#CBE2DA]">
-                  {activeSpeechAzkar.reference}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex shrink-0 items-center gap-1">
-              {speechSnap.tracks.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => speechPlayer.prevTrack()}
-                  disabled={speechSnap.currentIndex === 0}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/85 hover:bg-white/12 disabled:opacity-35"
-                  aria-label="পূর্ববর্তী"
-                >
-                  <SkipBack className="h-3.5 w-3.5" />
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => speechPlayer.togglePlayPause()}
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#E7C57B] to-[#C8963E] text-[#041D18]"
-                aria-label={speechSnap.status === 'playing' ? 'বিরতি' : 'চালু করুন'}
-              >
-                {speechSnap.status === 'playing' ? (
-                  <Pause className="h-3.5 w-3.5" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-              </button>
-
-              {speechSnap.tracks.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => speechPlayer.nextTrack()}
-                  disabled={speechSnap.currentIndex >= speechSnap.tracks.length - 1}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/85 hover:bg-white/12 disabled:opacity-35"
-                  aria-label="পরবর্তী"
-                >
-                  <SkipForward className="h-3.5 w-3.5" />
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setPinCollapsed((c) => !c)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#F6DC9B] hover:bg-white/12"
-                aria-label={pinCollapsed ? 'বড় করে দেখুন' : 'ছোট করুন'}
-              >
-                {pinCollapsed ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronUp className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          {!pinCollapsed && (
-            <div className="max-h-52 overflow-y-auto px-4 py-3 sm:px-5">
-              <SmoothSwap itemKey={activeSpeechAzkar.id} className="space-y-2">
-                <p
-                  dir="rtl"
-                  className="font-arabic text-right text-white"
-                  style={{
-                    fontSize: `${Math.min(28, Math.max(20, settings.arabicFontSize - 2))}px`,
-                    lineHeight: 2.0,
-                  }}
-                >
-                  {activeSpeechAzkar.arabic}
-                </p>
-                <p className="text-xs font-medium leading-relaxed text-[#6EE7B7]">
-                  {activeSpeechAzkar.transliterationBn}
-                </p>
-                <p className="text-xs leading-relaxed text-[#E2EFEA] sm:text-sm">
-                  {activeSpeechAzkar.meaningBn}
-                </p>
-              </SmoothSwap>
-            </div>
-          )}
-        </section>
-      ) : null}
-
       {/* Top Sub-Navigation Tabs: Hisnul Muslim, Ruqyah, 33 Ayat */}
       <div className="glass-card flex gap-1.5 overflow-x-auto rounded-2xl p-1.5">
         <button

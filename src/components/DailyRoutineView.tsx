@@ -864,7 +864,7 @@ export const DailyRoutineView: React.FC<DailyRoutineViewProps> = ({
                 ডিজিটাল তাসবিহ ও স্মার্ট যিকির কাউন্টার
               </h2>
               <p className="mt-0.5 truncate text-xs text-[#475A53] dark:text-[#9BB0A8]">
-                সুবহানাল্লাহ · আলহামদুলিল্লাহ · আল্লাহু আকবার · লা ইলাহা ইল্লাল্লাহ
+                সুবহানাল্লাহ · আলহামদুলিল্লাহ · লা ইলাহা ইল্লাল্লাহ · আল্লাহু আকবার · দরুদে ইব্রাহিম
               </p>
             </div>
           </div>
