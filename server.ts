@@ -27,6 +27,7 @@ async function startServer() {
         voice: typeof req.query.voice === 'string' ? req.query.voice : undefined,
         rate: typeof req.query.rate === 'string' ? req.query.rate : undefined,
         pitch: typeof req.query.pitch === 'string' ? req.query.pitch : undefined,
+        expandHonorifics: req.query.expand === '0' ? false : true,
       });
 
       res.setHeader('Content-Type', 'audio/mpeg');
@@ -60,6 +61,7 @@ async function startServer() {
           typeof body.pitch === 'string' || typeof body.pitch === 'number'
             ? body.pitch
             : undefined,
+        expandHonorifics: body.expandHonorifics === false ? false : true,
       });
 
       res.setHeader('Content-Type', 'audio/mpeg');

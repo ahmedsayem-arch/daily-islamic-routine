@@ -21,6 +21,7 @@ import {
   PRAYER_CALCULATION_METHODS,
   QARI_RECITERS,
 } from '../data/islamicData';
+import { TAFSIR_EDITIONS } from '../services/islamicApi';
 import type { NotificationPermState } from '../hooks/usePrayerNotifications';
 import type {
   AppSettings,
@@ -195,6 +196,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (settings.showBengaliTransliteration) parts.push('উচ্চারণ');
     if (settings.showBengaliTranslation) parts.push('বাংলা');
     if (settings.showEnglishTranslation) parts.push('English');
+    if (settings.showTafsir) parts.push('তাফসীর');
     if (settings.tajweedColorCoding) parts.push('তাজবীদ');
     return parts.length > 0 ? parts.join(' · ') : 'কোনোটিই নির্বাচিত নয়';
   }, [settings]);
@@ -862,6 +864,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       title: 'ইংরেজি অনুবাদ (English)',
                       desc: 'Sahih International ইংরেজি অর্থ প্রদর্শন',
                     },
+                    {
+                      key: 'showTafsir' as const,
+                      title: 'বাংলা তাফসীর ও অডিও',
+                      desc: 'আবু বকর যাকারিয়া, ইবনে কাসীর ও আহসানুল বায়ান',
+                    },
                   ].map((opt) => {
                     const enabled = settings[opt.key];
                     return (
@@ -895,6 +902,43 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </button>
                     );
                   })}
+
+                  {settings.showTafsir && (
+                    <div className="space-y-2 rounded-2xl border border-black/8 bg-black/[0.025] p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                      <p className="text-xs font-bold text-[#063D34] dark:text-[#F6DC9B]">
+                        তাফসীর গ্রন্থ নির্বাচন করুন
+                      </p>
+                      <div className="space-y-1.5">
+                        {TAFSIR_EDITIONS.map((ed) => {
+                          const selected = (settings.tafsirEdition || 'zakaria') === ed.id;
+                          return (
+                            <button
+                              key={ed.id}
+                              type="button"
+                              onClick={() => onUpdateSettings({ tafsirEdition: ed.id })}
+                              className={`flex min-h-[48px] w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                                selected
+                                  ? 'border-[#0D6E52] bg-[#0D6E52]/12 dark:border-[#E7C57B]/60 dark:bg-[#063D34]/75'
+                                  : 'border-black/8 bg-white/80 dark:border-white/10 dark:bg-white/[0.04]'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-[#0F1F1A] dark:text-[#F0F5F3]">
+                                  {ed.nameBn}
+                                </p>
+                                <p className="truncate text-[11px] text-[#475A53] dark:text-[#9BB0A8]">
+                                  {ed.descBn}
+                                </p>
+                              </div>
+                              {selected && (
+                                <Check className="h-4 w-4 shrink-0 text-[#0D6E52] dark:text-[#E7C57B]" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {settings.tajweedColorCoding && (
                     <div className="flex flex-wrap gap-x-3 gap-y-1 rounded-2xl border border-black/8 bg-black/[0.025] p-3 text-[11px] font-semibold dark:border-white/10 dark:bg-white/[0.03]">

@@ -7,12 +7,14 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Download,
   FolderPlus,
   Folders,
   Heart,
   Loader2,
   Maximize2,
+  Mic,
   Pause,
   Pencil,
   Play,
@@ -29,7 +31,14 @@ import {
   QURAN_STUDY_IMG,
 } from '../data/islamicData';
 import { buildBanglaQuranSurahUrl } from '../data/banglaQuranAudio';
-import { fetchSurahWithBengali } from '../services/islamicApi';
+import {
+  cleanTafsirForReading,
+  fetchSurahTafsir,
+  fetchSurahWithBengali,
+  prefetchSurahTafsirForOffline,
+  splitTafsirForSpeechSegments,
+  TAFSIR_EDITIONS,
+} from '../services/islamicApi';
 import type {
   AppSettings,
   AudioTrackItem,
@@ -37,6 +46,7 @@ import type {
   FavoriteGroup,
   QariReciter,
   QuranAyahPair,
+  TafsirEditionId,
 } from '../types/islamic';
 import {
   TAJWEED_COLOR_CLASSES,
@@ -47,8 +57,14 @@ import {
   downloadAudioUrlsForOffline,
   prewarmUpcomingAudioUrls,
 } from '../utils/offlineAudioCache';
+import {
+  speechPlayer,
+  type SpeechTrack,
+  useSpeechPlayer,
+} from '../utils/speechPlayer';
 import { TajweedArabicText } from './TajweedArabicText';
 import { SmoothStage } from './SmoothTransition';
+import { VoiceSelectorSection } from './VoiceSelectorSection';
 
 interface QuranViewProps {
   selectedQari: QariReciter;
@@ -173,6 +189,28 @@ export const QuranView: React.FC<QuranViewProps> = ({
   // Modal for choosing which group(s) an Ayah belongs to
   const [groupPickerEntry, setGroupPickerEntry] = useState<FavoriteAyahEntry | null>(null);
   const [pickerInlineNewGroup, setPickerInlineNewGroup] = useState('');
+
+  // Authentic Bangladeshi / Bengali Tafsir state
+  const activeTafsirEdition: TafsirEditionId = settings.tafsirEdition || 'zakaria';
+  const activeTafsirMeta = useMemo(
+    () => TAFSIR_EDITIONS.find((e) => e.id === activeTafsirEdition) || TAFSIR_EDITIONS[0],
+    [activeTafsirEdition]
+  );
+  const [tafsirMap, setTafsirMap] = useState<Record<number, string>>({});
+  const [tafsirLoading, setTafsirLoading] = useState(false);
+  const [tafsirError, setTafsirError] = useState<string | null>(null);
+  const [expandedTafsirKeys, setExpandedTafsirKeys] = useState<Record<string, boolean>>({});
+  const [tafsirReloadTick, setTafsirReloadTick] = useState(0);
+  const [favTafsirByCacheKey, setFavTafsirByCacheKey] = useState<
+    Record<string, Record<number, string>>
+  >({});
+  const [favTafsirBusyKey, setFavTafsirBusyKey] = useState<string | null>(null);
+  const [showTafsirVoicePanel, setShowTafsirVoicePanel] = useState(false);
+  const speechSnap = useSpeechPlayer();
+  const activeMaleVoiceLabels = useMemo(
+    () => speechPlayer.getActiveMaleVoiceLabels(),
+    [speechSnap.voicePrefs]
+  );
 
   const surahMeta = useMemo(
     () => ALL_SURAHS.find((s) => s.number === selectedSurahNum) || ALL_SURAHS[0],
@@ -302,14 +340,54 @@ export const QuranView: React.FC<QuranViewProps> = ({
     };
   }, [ayahs, selectedSurahNum]);
 
-  // Keep the currently reciting Ayah scrolled smoothly to the top of the reader view
+  // Fetch Surah Tafsir when Tafsir display is active or reader opens
   useEffect(() => {
-    if (!autoFollowAyah || !activeTrackKey || loading) return;
-    const el = ayahElementRefs.current.get(activeTrackKey);
+    if (!readerOpen || !settings.showTafsir) return;
+    let active = true;
+    setTafsirLoading(true);
+    setTafsirError(null);
+    fetchSurahTafsir(selectedSurahNum, activeTafsirEdition)
+      .then((map) => {
+        if (active) {
+          setTafsirMap(map);
+          setTafsirLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setTafsirError(err instanceof Error ? err.message : 'তাফসীর লোড করা যায়নি');
+          setTafsirLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [readerOpen, settings.showTafsir, selectedSurahNum, activeTafsirEdition, tafsirReloadTick]);
+
+  // Keep the currently reciting Ayah (or active Tafsir audio Ayah) scrolled smoothly
+  useEffect(() => {
+    if (!autoFollowAyah || loading) return;
+    const tafsirActiveTrackKey =
+      speechSnap.status === 'playing' &&
+      speechSnap.currentTrack?.id.startsWith(`tafsir-${activeTafsirEdition}-`)
+        ? speechSnap.currentTrack.id.replace(`tafsir-${activeTafsirEdition}-`, '')
+        : null;
+    const targetKey = activeTrackKey || tafsirActiveTrackKey;
+    if (!targetKey) return;
+    const el = ayahElementRefs.current.get(targetKey);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [activeTrackKey, autoFollowAyah, ayahs.length, loading, readerStyle]);
+  }, [
+    activeTrackKey,
+    autoFollowAyah,
+    ayahs.length,
+    loading,
+    readerStyle,
+    speechSnap.status,
+    speechSnap.currentTrack,
+    activeTafsirEdition,
+  ]);
 
   const handleDownloadSurahOffline = async () => {
     if (ayahs.length === 0 || offlineSavingProgress) return;
@@ -318,15 +396,139 @@ export const QuranView: React.FC<QuranViewProps> = ({
     const urls = [...ayahUrls, banglaUrl];
     setOfflineSavingProgress({ done: 0, total: urls.length });
     try {
-      await downloadAudioUrlsForOffline(urls, (done, total) => {
-        setOfflineSavingProgress({ done, total });
-      });
+      await Promise.all([
+        downloadAudioUrlsForOffline(urls, (done, total) => {
+          setOfflineSavingProgress({ done, total });
+        }),
+        prefetchSurahTafsirForOffline(selectedSurahNum, activeTafsirEdition),
+      ]);
       const updated = await countCachedAudioUrls(ayahUrls);
       const bnCnt = await countCachedAudioUrls([banglaUrl]);
       setOfflineSavedCount(updated);
       setBanglaSurahSaved(bnCnt > 0);
     } finally {
       setOfflineSavingProgress(null);
+    }
+  };
+
+  const buildTafsirTrack = (
+    surahNum: number,
+    surahNameBn: string,
+    ayahNum: number,
+    rawTafsirText: string,
+    editionId: TafsirEditionId
+  ): SpeechTrack | null => {
+    const editionMeta = TAFSIR_EDITIONS.find((e) => e.id === editionId) || TAFSIR_EDITIONS[0];
+    const bodySegments = splitTafsirForSpeechSegments(rawTafsirText);
+    if (bodySegments.length === 0) return null;
+    const intro = `সূরা ${surahNameBn}, আয়াত ${ayahNum}-এর তাফসীর।`;
+    const segments =
+      bodySegments[0].lang === 'bn-BD'
+        ? [
+            { text: `${intro} ${bodySegments[0].text}`, lang: 'bn-BD' as const },
+            ...bodySegments.slice(1),
+          ]
+        : [{ text: intro, lang: 'bn-BD' as const }, ...bodySegments];
+    return {
+      id: `tafsir-${editionMeta.id}-${surahNum}:${ayahNum}`,
+      titleBn: `সূরা ${surahNameBn} (${surahNum}:${ayahNum}) · তাফসীর`,
+      subtitleBn: editionMeta.nameBn,
+      segments,
+    };
+  };
+
+  const handlePlaySurahTafsirFromAyah = async (startIdx: number) => {
+    if (ayahs.length === 0) return;
+    const targetAyah = ayahs[startIdx];
+    if (!targetAyah) return;
+    const trackId = `tafsir-${activeTafsirEdition}-${selectedSurahNum}:${targetAyah.numberInSurah}`;
+
+    if (speechSnap.currentTrack?.id === trackId && speechSnap.status !== 'idle') {
+      speechPlayer.togglePlayPause();
+      return;
+    }
+
+    // Unlock neural male <audio> slots synchronously during the user tap before async Tafsir fetch
+    speechPlayer.primeOnUserGesture();
+
+    let currentMap = tafsirMap;
+    if (!currentMap[targetAyah.numberInSurah]) {
+      setTafsirLoading(true);
+      try {
+        currentMap = await fetchSurahTafsir(selectedSurahNum, activeTafsirEdition);
+        setTafsirMap(currentMap);
+        setTafsirError(null);
+      } catch (err) {
+        setTafsirError(err instanceof Error ? err.message : 'তাফসীর লোড করা যায়নি');
+        setTafsirLoading(false);
+        return;
+      } finally {
+        setTafsirLoading(false);
+      }
+    }
+
+    const slice = ayahs.slice(startIdx, Math.min(ayahs.length, startIdx + 15));
+    const queue = slice
+      .map((a) => {
+        const raw = currentMap[a.numberInSurah];
+        if (!raw) return null;
+        return buildTafsirTrack(
+          selectedSurahNum,
+          surahMeta.nameBn,
+          a.numberInSurah,
+          raw,
+          activeTafsirEdition
+        );
+      })
+      .filter((t): t is SpeechTrack => Boolean(t));
+
+    if (queue.length > 0) {
+      speechPlayer.playQueue(queue, 0);
+    }
+  };
+
+  const handleToggleFavoriteTafsir = async (fav: FavoriteAyahEntry, playAudioAfterLoad = false) => {
+    const cacheKey = `${activeTafsirEdition}:${fav.surah}`;
+    const trackId = `tafsir-${activeTafsirEdition}-${fav.surah}:${fav.ayah}`;
+
+    if (playAudioAfterLoad && speechSnap.currentTrack?.id === trackId && speechSnap.status !== 'idle') {
+      speechPlayer.togglePlayPause();
+      return;
+    }
+
+    if (playAudioAfterLoad) {
+      speechPlayer.primeOnUserGesture();
+    }
+
+    let surahMap = favTafsirByCacheKey[cacheKey];
+    if (!surahMap) {
+      setFavTafsirBusyKey(fav.key);
+      try {
+        surahMap = await fetchSurahTafsir(fav.surah, activeTafsirEdition);
+        setFavTafsirByCacheKey((prev) => ({ ...prev, [cacheKey]: surahMap }));
+      } catch {
+        setFavTafsirBusyKey(null);
+        return;
+      } finally {
+        setFavTafsirBusyKey(null);
+      }
+    }
+
+    const raw = surahMap[fav.ayah];
+    if (!raw) return;
+
+    if (playAudioAfterLoad) {
+      const track = buildTafsirTrack(
+        fav.surah,
+        fav.surahNameBn,
+        fav.ayah,
+        raw,
+        activeTafsirEdition
+      );
+      if (track) speechPlayer.playQueue([track], 0);
+    } else {
+      const expandKey = `fav-${fav.key}`;
+      setExpandedTafsirKeys((prev) => ({ ...prev, [expandKey]: !prev[expandKey] }));
     }
   };
 
@@ -994,6 +1196,73 @@ export const QuranView: React.FC<QuranViewProps> = ({
                           {fav.english}
                         </p>
                       )}
+
+                      {settings.showTafsir && (() => {
+                        const favCacheKey = `${activeTafsirEdition}:${fav.surah}`;
+                        const favRawTafsir = favTafsirByCacheKey[favCacheKey]?.[fav.ayah] || '';
+                        const favExpandKey = `fav-${fav.key}`;
+                        const isFavTafsirExpanded = Boolean(expandedTafsirKeys[favExpandKey]);
+                        const favTafsirTrackId = `tafsir-${activeTafsirEdition}-${fav.surah}:${fav.ayah}`;
+                        const isFavTafsirAudioActive =
+                          speechSnap.currentTrack?.id === favTafsirTrackId &&
+                          speechSnap.status !== 'idle';
+                        const isFavTafsirPlaying =
+                          isFavTafsirAudioActive && speechSnap.status === 'playing';
+                        const isBusy = favTafsirBusyKey === fav.key;
+                        const paragraphs = favRawTafsir ? cleanTafsirForReading(favRawTafsir) : [];
+
+                        return (
+                          <div className="mt-3 rounded-2xl border border-[#0D6E52]/18 bg-[#0D6E52]/[0.035] p-3 dark:border-[#E7C57B]/18 dark:bg-white/[0.03]">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex min-w-0 items-center gap-1.5 text-xs font-bold text-[#063D34] dark:text-[#F6DC9B]">
+                                <BookOpen className="h-3.5 w-3.5 shrink-0 text-[#0D6E52] dark:text-[#E7C57B]" />
+                                <span className="truncate">{activeTafsirMeta.nameBn}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => handleToggleFavoriteTafsir(fav, true)}
+                                  className={`flex min-h-[34px] items-center gap-1.5 rounded-xl px-3 text-[11px] font-bold transition-colors ${
+                                    isFavTafsirPlaying
+                                      ? 'bg-[#063D34] text-[#F6DC9B]'
+                                      : 'border border-[#0D6E52]/25 bg-white/85 text-[#063D34] hover:bg-[#0D6E52]/10 dark:border-[#E7C57B]/30 dark:bg-white/[0.06] dark:text-[#F6DC9B]'
+                                  }`}
+                                >
+                                  {isBusy ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : isFavTafsirPlaying ? (
+                                    <Pause className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Volume2 className="h-3.5 w-3.5" />
+                                  )}
+                                  <span>{isFavTafsirPlaying ? 'বিরতি' : 'তাফসীর শুনুন'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => handleToggleFavoriteTafsir(fav, false)}
+                                  className="flex min-h-[34px] items-center gap-1 rounded-xl border border-black/10 bg-white/80 px-2.5 text-[11px] font-semibold text-[#475A53] dark:border-white/10 dark:bg-white/[0.05] dark:text-[#CBE2DA]"
+                                >
+                                  <span>{isFavTafsirExpanded ? 'বন্ধ' : 'পড়ুন'}</span>
+                                  {isFavTafsirExpanded ? (
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                            {isFavTafsirExpanded && paragraphs.length > 0 && (
+                              <div className="mt-2.5 space-y-2 border-t border-black/8 pt-2.5 text-sm leading-[1.85] text-[#1D322B] dark:border-white/10 dark:text-[#DCEAE5]">
+                                {paragraphs.map((p, pIdx) => (
+                                  <p key={pIdx}>{p}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </article>
                   );
                 })}
@@ -1357,30 +1626,97 @@ export const QuranView: React.FC<QuranViewProps> = ({
                 </div>
 
                 {readerStyle === 'translation' ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {[
-                      { key: 'tajweedColorCoding' as const, label: 'তাজবীদ কালার' },
-                      { key: 'showArabic' as const, label: 'আরবি' },
-                      { key: 'showBengaliTransliteration' as const, label: 'বাংলা উচ্চারণ' },
-                      { key: 'showBengaliTranslation' as const, label: 'বাংলা অর্থ' },
-                      { key: 'showEnglishTranslation' as const, label: 'English' },
-                    ].map((opt) => {
-                      const active = settings[opt.key];
-                      return (
-                        <button
-                          key={opt.key}
-                          type="button"
-                          onClick={() => onUpdateSettings({ [opt.key]: !active })}
-                          className={`min-h-[36px] rounded-xl border px-3 text-xs font-semibold transition-colors ${
-                            active
-                              ? 'border-[#0D6E52] bg-[#063D34] text-[#F6DC9B] dark:border-[#E7C57B]/50'
-                              : 'border-black/10 bg-white/80 text-[#475A53] hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.04] dark:text-[#9BB0A8]'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { key: 'tajweedColorCoding' as const, label: 'তাজবীদ কালার' },
+                        { key: 'showArabic' as const, label: 'আরবি' },
+                        { key: 'showBengaliTransliteration' as const, label: 'বাংলা উচ্চারণ' },
+                        { key: 'showBengaliTranslation' as const, label: 'বাংলা অর্থ' },
+                        { key: 'showEnglishTranslation' as const, label: 'English' },
+                        { key: 'showTafsir' as const, label: 'তাফসীর' },
+                      ].map((opt) => {
+                        const active = settings[opt.key];
+                        return (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            onClick={() => onUpdateSettings({ [opt.key]: !active })}
+                            className={`min-h-[36px] rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                              active
+                                ? 'border-[#0D6E52] bg-[#063D34] text-[#F6DC9B] dark:border-[#E7C57B]/50'
+                                : 'border-black/10 bg-white/80 text-[#475A53] hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.04] dark:text-[#9BB0A8]'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {settings.showTafsir && (
+                      <div className="space-y-2 rounded-2xl border border-[#0D6E52]/15 bg-[#0D6E52]/[0.04] px-3 py-2.5 dark:border-[#E7C57B]/15 dark:bg-white/[0.03]">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] font-bold text-[#063D34] dark:text-[#F6DC9B]">
+                              বিশুদ্ধ তাফসীর:
+                            </span>
+                            {TAFSIR_EDITIONS.map((ed) => {
+                              const selected = activeTafsirEdition === ed.id;
+                              return (
+                                <button
+                                  key={ed.id}
+                                  type="button"
+                                  onClick={() => onUpdateSettings({ tafsirEdition: ed.id })}
+                                  className={`min-h-[32px] rounded-xl border px-2.5 text-[11px] font-bold transition-colors ${
+                                    selected
+                                      ? 'border-[#0D6E52] bg-[#063D34] text-[#F6DC9B] dark:border-[#E7C57B]/60'
+                                      : 'border-black/10 bg-white/85 text-[#475A53] hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.05] dark:text-[#CBE2DA]'
+                                  }`}
+                                >
+                                  {ed.nameBn}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setShowTafsirVoicePanel((v) => !v)}
+                              className={`flex min-h-[34px] items-center gap-1.5 rounded-xl border px-2.5 text-[11px] font-bold transition-colors ${
+                                showTafsirVoicePanel
+                                  ? 'border-[#0D6E52] bg-[#0D6E52]/15 text-[#063D34] dark:border-[#E7C57B]/60 dark:bg-[#063D34] dark:text-[#F6DC9B]'
+                                  : 'border-[#0D6E52]/25 bg-white text-[#0D6E52] hover:bg-[#0D6E52]/10 dark:border-[#E7C57B]/30 dark:bg-white/[0.05] dark:text-[#F6DC9B]'
+                              }`}
+                            >
+                              <Mic className="h-3.5 w-3.5" />
+                              <span>{showTafsirVoicePanel ? 'ভয়েস বন্ধ' : 'ভয়েস নির্বাচন'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={loading || ayahs.length === 0}
+                              onClick={() => handlePlaySurahTafsirFromAyah(0)}
+                              className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#063D34] to-[#0D6E52] px-3 text-[11px] font-bold text-[#F6DC9B] shadow-xs transition-opacity hover:opacity-95 disabled:opacity-50"
+                            >
+                              <Volume2 className="h-3.5 w-3.5" />
+                              <span>তাফসীর শুনুন (আয়াত ১ থেকে)</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <p className="text-[11px] font-medium text-[#0D6E52] dark:text-[#E7C57B]">
+                          হাদিস ও তাফসীরের কণ্ঠ: {activeMaleVoiceLabels.bangla} (আরবি: {activeMaleVoiceLabels.arabic})
+                        </p>
+
+                        {showTafsirVoicePanel && (
+                          <div className="pt-1">
+                            <VoiceSelectorSection compact />
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1630,6 +1966,166 @@ export const QuranView: React.FC<QuranViewProps> = ({
                             {ayah.english}
                           </p>
                         )}
+
+                        {settings.showTafsir && (() => {
+                          const rawTafsir = tafsirMap[ayah.numberInSurah] || '';
+                          const paragraphs = rawTafsir ? cleanTafsirForReading(rawTafsir) : [];
+                          const tafsirExpandKey = `${activeTafsirEdition}:${trackId}`;
+                          const isExpanded = Boolean(expandedTafsirKeys[tafsirExpandKey]);
+                          const tafsirTrackId = `tafsir-${activeTafsirEdition}-${trackId}`;
+                          const isThisTafsirActive =
+                            speechSnap.currentTrack?.id === tafsirTrackId &&
+                            speechSnap.status !== 'idle';
+                          const isThisTafsirPlaying =
+                            isThisTafsirActive && speechSnap.status === 'playing';
+                          const previewSnippet = paragraphs.join(' ').slice(0, 175);
+
+                          return (
+                            <div
+                              className={`mt-3.5 rounded-2xl border p-3.5 transition-colors ${
+                                isThisTafsirActive
+                                  ? 'border-[#0D6E52]/45 bg-[#0D6E52]/[0.08] dark:border-[#E7C57B]/40 dark:bg-[#063D34]/55'
+                                  : 'border-[#0D6E52]/15 bg-[#0D6E52]/[0.03] dark:border-[#E7C57B]/15 dark:bg-white/[0.025]'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#0D6E52]/12 text-[#0D6E52] dark:bg-[#E7C57B]/15 dark:text-[#F6DC9B]">
+                                    <BookOpen className="h-3.5 w-3.5" />
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="truncate text-xs font-bold text-[#063D34] dark:text-[#F6DC9B]">
+                                      তাফসীর · {activeTafsirMeta.nameBn}
+                                    </p>
+                                    <p className="truncate text-[10px] text-[#475A53] dark:text-[#9BB0A8]">
+                                      {activeTafsirMeta.authorBn}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePlaySurahTafsirFromAyah(idx)}
+                                    disabled={tafsirLoading && !rawTafsir}
+                                    className={`flex min-h-[36px] items-center gap-1.5 rounded-xl px-3 text-[11px] font-bold transition-colors disabled:opacity-50 ${
+                                      isThisTafsirPlaying
+                                        ? 'bg-[#063D34] text-[#F6DC9B] shadow-xs'
+                                        : isThisTafsirActive
+                                        ? 'border border-[#0D6E52] bg-[#0D6E52]/15 text-[#063D34] dark:border-[#E7C57B]/60 dark:text-[#F6DC9B]'
+                                        : 'border border-[#0D6E52]/25 bg-white/90 text-[#063D34] hover:bg-[#0D6E52]/10 dark:border-[#E7C57B]/30 dark:bg-white/[0.06] dark:text-[#F6DC9B] dark:hover:bg-white/10'
+                                    }`}
+                                    aria-label={
+                                      isThisTafsirPlaying
+                                        ? 'তাফসীর অডিও বিরতি দিন'
+                                        : 'তাফসীর অডিও শুনুন'
+                                    }
+                                  >
+                                    {tafsirLoading && !rawTafsir ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : isThisTafsirPlaying ? (
+                                      <Pause className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Volume2 className="h-3.5 w-3.5" />
+                                    )}
+                                    <span>
+                                      {isThisTafsirPlaying
+                                        ? 'বিরতি'
+                                        : isThisTafsirActive
+                                        ? 'চালু করুন'
+                                        : 'তাফসীর শুনুন'}
+                                    </span>
+                                  </button>
+
+                                  {isThisTafsirActive && (
+                                    <button
+                                      type="button"
+                                      onClick={() => speechPlayer.stop()}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 bg-white/80 text-[#475A53] hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.05] dark:text-[#CBE2DA]"
+                                      aria-label="তাফসীর অডিও বন্ধ করুন"
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedTafsirKeys((prev) => ({
+                                        ...prev,
+                                        [tafsirExpandKey]: !prev[tafsirExpandKey],
+                                      }))
+                                    }
+                                    className="flex min-h-[36px] items-center gap-1 rounded-xl border border-black/10 bg-white/85 px-2.5 text-[11px] font-semibold text-[#0F1F1A] hover:bg-black/5 dark:border-white/12 dark:bg-white/[0.05] dark:text-[#F0F5F3]"
+                                  >
+                                    <span>{isExpanded ? 'সংক্ষিপ্ত' : 'পড়ুন'}</span>
+                                    {isExpanded ? (
+                                      <ChevronUp className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <ChevronDown className="h-3.5 w-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {tafsirLoading && !rawTafsir ? (
+                                <p className="mt-2.5 text-xs text-[#475A53] dark:text-[#9BB0A8]">
+                                  বিশুদ্ধ তাফসীর লোড হচ্ছে...
+                                </p>
+                              ) : tafsirError && !rawTafsir ? (
+                                <div className="mt-2.5 flex items-center justify-between gap-2 text-xs text-[#475A53] dark:text-[#9BB0A8]">
+                                  <span>{tafsirError}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTafsirReloadTick((t) => t + 1)}
+                                    className="rounded-lg bg-[#0D6E52] px-2.5 py-1 text-[11px] font-bold text-white"
+                                  >
+                                    পুনরায় চেষ্টা
+                                  </button>
+                                </div>
+                              ) : paragraphs.length > 0 ? (
+                                isExpanded ? (
+                                  <div className="mt-3 space-y-2.5 border-t border-black/8 pt-3 text-sm leading-[1.9] text-[#1D322B] dark:border-white/10 dark:text-[#DCEAE5] sm:text-[15px]">
+                                    {paragraphs.map((para, pIdx) => (
+                                      <p key={pIdx}>{para}</p>
+                                    ))}
+                                    <div className="flex justify-end pt-1">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setExpandedTafsirKeys((prev) => ({
+                                            ...prev,
+                                            [tafsirExpandKey]: false,
+                                          }))
+                                        }
+                                        className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold text-[#0D6E52] hover:bg-[#0D6E52]/10 dark:text-[#E7C57B]"
+                                      >
+                                        <span>তাফসীর সংক্ষিপ্ত করুন</span>
+                                        <ChevronUp className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedTafsirKeys((prev) => ({
+                                        ...prev,
+                                        [tafsirExpandKey]: true,
+                                      }))
+                                    }
+                                    className="mt-2 block w-full text-left text-xs leading-relaxed text-[#475A53] hover:text-[#0F1F1A] dark:text-[#B5CBC3] dark:hover:text-white sm:text-[13px]"
+                                  >
+                                    <span className="line-clamp-2">
+                                      {previewSnippet}
+                                      {paragraphs.join(' ').length > 175 ? '...' : ''}
+                                    </span>
+                                  </button>
+                                )
+                              ) : null}
+                            </div>
+                          );
+                        })()}
                       </article>
                     );
                   })}

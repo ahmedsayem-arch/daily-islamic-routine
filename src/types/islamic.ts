@@ -52,6 +52,17 @@ export interface FavoriteAyahEntry {
   savedAt: number;
 }
 
+export type TafsirEditionId = 'zakaria' | 'ibn_kathir' | 'ahsanul_bayaan';
+
+export interface TafsirEditionMeta {
+  id: TafsirEditionId;
+  nameBn: string;
+  authorBn: string;
+  slug: string;
+  quranComId: number;
+  descBn: string;
+}
+
 export interface AppSettings {
   arabicFontSize: number;
   arabicFont: ArabicFontId;
@@ -60,6 +71,8 @@ export interface AppSettings {
   showBengaliTransliteration: boolean;
   showBengaliTranslation: boolean;
   showEnglishTranslation: boolean;
+  showTafsir: boolean;
+  tafsirEdition: TafsirEditionId;
   prayerMethod: number;
   prayerSchool: 0 | 1;
   notificationsEnabled: boolean;

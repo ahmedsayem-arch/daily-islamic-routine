@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { audioKeepAlive } from './audioKeepAlive';
+import { expandBanglaIslamicHonorifics } from './banglaHonorifics';
 import {
   clearMediaSession,
   registerMediaSessionHandlers,
@@ -92,6 +93,7 @@ export interface SpeechVoicePrefs {
   customArabicVoiceUri: string;
   rate: number;
   pitch: number;
+  expandHonorifics: boolean;
 }
 
 const DEFAULT_VOICE_PREFS: SpeechVoicePrefs = {
@@ -102,6 +104,7 @@ const DEFAULT_VOICE_PREFS: SpeechVoicePrefs = {
   customArabicVoiceUri: '',
   rate: 1.0,
   pitch: 1.0,
+  expandHonorifics: true,
 };
 
 const VOICE_PREFS_STORAGE_KEY = 'noor_speech_voice_prefs_v4';
@@ -139,6 +142,7 @@ function loadVoicePrefs(): SpeechVoicePrefs {
           typeof parsed.pitch === 'number' && parsed.pitch >= 0.65 && parsed.pitch <= 1.35
             ? parsed.pitch
             : 1.0,
+        expandHonorifics: parsed.expandHonorifics !== false,
       };
     }
 
@@ -170,6 +174,7 @@ function loadVoicePrefs(): SpeechVoicePrefs {
           typeof legacy.pitch === 'number' && parsedPitchOk(legacy.pitch)
             ? legacy.pitch!
             : 1.0,
+        expandHonorifics: true,
       };
       localStorage.setItem(VOICE_PREFS_STORAGE_KEY, JSON.stringify(migrated));
       return migrated;
@@ -202,18 +207,25 @@ interface FlatChunk {
   lang: SpeechLangCode;
 }
 
-function normalizeTextForSpeech(rawText: string, lang: SpeechLangCode): string {
-  if (lang !== 'bn-BD') return rawText.replace(/\s+/g, ' ').trim();
-  return rawText
-    .replace(/ﷺ/g, ' সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম ')
-    .replace(/\(\s*সা\.?\s*\)|\(\s*সাঃ\s*\)|\(\s*স\.\s*\)/g, ' সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম ')
-    .replace(/\(\s*রা\.?\s*\)|\(\s*রাঃ\s*\)|\(\s*রাযি\.?\s*\)/g, ' রাদিয়াল্লাহু আনহু ')
-    .replace(/\(\s*আ\.?\s*\)|\(\s*আঃ\s*\)/g, ' আলাইহিস সালাম ')
-    .replace(/\(\s*রহ\.?\s*\)|\(\s*রহঃ\s*\)/g, ' রাহিমাহুল্লাহ ')
-    .replace(/[·•—–|/]+/g, ', ')
-    .replace(/\[([^\]]+)\]/g, ', $1, ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function normalizeTextForSpeech(
+  rawText: string,
+  lang: SpeechLangCode,
+  expandHonorifics = true
+): string {
+  if (lang === 'bn-BD') {
+    return expandBanglaIslamicHonorifics(rawText, expandHonorifics);
+  }
+  if (lang === 'en-US' && expandHonorifics) {
+    return rawText
+      .replace(/ﷺ/g, ' peace and blessings be upon him ')
+      .replace(/\(\s*pbuh\s*\)/gi, ' peace and blessings be upon him ')
+      .replace(/\(\s*saws\s*\)/gi, ' sallallahu alayhi wa sallam ')
+      .replace(/\(\s*ra\s*\)/gi, ' may Allah be pleased with him ')
+      .replace(/\(\s*as\s*\)/gi, ' peace be upon him ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  return rawText.replace(/\s+/g, ' ').trim();
 }
 
 function splitIntoSpeakableChunks(rawText: string, maxLen = 360): string[] {
@@ -364,6 +376,7 @@ function buildMaleTtsApiUrl(
     voice,
     rate: prefs.rate.toFixed(2),
     pitch: prefs.pitch.toFixed(2),
+    expand: prefs.expandHonorifics ? '1' : '0',
     q: '96k',
   });
   return `/api/tts?${params.toString()}`;
@@ -464,6 +477,15 @@ class SpeechNarrationManager {
         // ignore
       }
     }
+  }
+
+  /**
+   * Call synchronously inside click/tap handlers before any async fetch
+   * so mobile browsers keep audio playback unlocked for neural voice tracks.
+   */
+  public primeOnUserGesture() {
+    this.primeNeuralAudioOnGesture();
+    audioKeepAlive.acquire('speech');
   }
 
   private revokeSlotObjectUrl(slot: 'A' | 'B') {
@@ -662,6 +684,10 @@ class SpeechNarrationManager {
     this.emit();
 
     if (this.status === 'playing' && this.flatChunks.length > 0) {
+      if (patch.expandHonorifics !== undefined && this.tracks.length > 0) {
+        this.playQueue(this.tracks, this.currentTrackIndex);
+        return;
+      }
       this.sessionToken += 1;
       this.stopNeuralAudio();
       this.cancelWebSpeech();
@@ -683,7 +709,28 @@ class SpeechNarrationManager {
             'নির্বাচিত বাংলা কণ্ঠ',
           segments: [
             {
-              text: 'আসসালামু আলাইকুম। আল্লাহর যিকিরেই অন্তরসমূহ প্রশান্তি লাভ করে।',
+              text: 'আসসালামু আলাইকুম। রাসূলুল্লাহ সা. বলেছেন, আল্লাহর যিকিরেই অন্তরসমূহ প্রশান্তি লাভ করে।',
+              lang: 'bn-BD',
+            },
+          ],
+        },
+      ],
+      0
+    );
+  }
+
+  previewHonorificExpansion() {
+    this.playQueue(
+      [
+        {
+          id: 'voice-preview-honorifics',
+          titleBn: 'সা., রা., আ., রহ. পূর্ণ উচ্চারণ নমুনা',
+          subtitleBn:
+            VOICE_PROFILES.find((p) => p.id === this.voicePrefs.profile)?.labelBn ||
+            'স্পষ্ট ইসলামী পুরুষ কণ্ঠ',
+          segments: [
+            {
+              text: 'হযরত আবূ হুরায়রা রা. এবং আয়িশা রা. থেকে বর্ণিত, নবী মুহাম্মাদ সা. এবং মূসা আ. ও ইমাম বুখারী রহ. সম্পর্কে বিশুদ্ধ বর্ণনা এসেছে।',
               lang: 'bn-BD',
             },
           ],
@@ -805,7 +852,11 @@ class SpeechNarrationManager {
     validTracks.forEach((track, idx) => {
       if (idx < this.currentTrackIndex) return;
       for (const seg of track.segments) {
-        const normalized = normalizeTextForSpeech(seg.text, seg.lang);
+        const normalized = normalizeTextForSpeech(
+          seg.text,
+          seg.lang,
+          this.voicePrefs.expandHonorifics
+        );
         const pieces = splitIntoSpeakableChunks(normalized, 360);
         for (const piece of pieces) {
           this.flatChunks.push({
@@ -991,8 +1042,9 @@ class SpeechNarrationManager {
 
     while (
       this.chunkCursor < this.flatChunks.length &&
-      this.flatChunks[this.chunkCursor].lang === 'ar-SA' &&
-      this.voicePrefs.arabicMode === 'skip'
+      ((this.flatChunks[this.chunkCursor].lang === 'ar-SA' &&
+        this.voicePrefs.arabicMode === 'skip') ||
+        !/[\p{L}\p{N}]/u.test(this.flatChunks[this.chunkCursor].text))
     ) {
       this.chunkCursor += 1;
     }

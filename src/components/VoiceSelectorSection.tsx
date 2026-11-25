@@ -30,7 +30,7 @@ export const VoiceSelectorSection: React.FC<VoiceSelectorSectionProps> = ({
       {/* Active Male Voice Summary Banner */}
       <div className="rounded-2xl border border-[#0D6E52]/20 bg-[#0D6E52]/[0.06] p-3.5 dark:border-[#E7C57B]/25 dark:bg-[#0D6E52]/15">
         <p className="text-xs font-bold text-[#0D6E52] dark:text-[#F6DC9B]">
-          আরবি · বাংলা · ইংরেজি — সব ভাষায় ১০০% ছেলে কণ্ঠ সক্রিয়
+          আরবি · বাংলা · ইংরেজি — সব ভাষায় ১০০% ছেলে কণ্ঠ সক্রিয় (সা., রা., আ., রহ. পূর্ণ উচ্চারণসহ)
         </p>
         <div className="mt-2 grid grid-cols-1 gap-1.5 text-[11px] sm:grid-cols-3">
           <div className="rounded-xl bg-white/75 px-2.5 py-1.5 dark:bg-black/25">
@@ -224,6 +224,48 @@ export const VoiceSelectorSection: React.FC<VoiceSelectorSectionProps> = ({
               }
               className="h-2 w-full cursor-pointer accent-[#0D6E52] dark:accent-[#D4A853]"
             />
+          </div>
+        </div>
+        {/* Islamic Honorific Expansion Control + Live Sample */}
+        <div className="mt-3 rounded-xl border border-[#0D6E52]/20 bg-[#0D6E52]/[0.05] p-3 dark:border-[#E7C57B]/20 dark:bg-[#0D6E52]/12">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-[#063D34] dark:text-[#F6DC9B]">
+                সা., রা., আ., রহ. বিস্তারিত উচ্চারণ
+              </p>
+              <p className="mt-0.5 text-[11px] leading-snug text-[#475A53] dark:text-[#CBE2DA]">
+                সা. / সঃ → সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম · রা. / রাঃ → রাদিয়াল্লাহু আনহু / আনহা · আ. → আলাইহিস সালাম · রহ. → রাহিমাহুল্লাহ
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => speechPlayer.previewHonorificExpansion()}
+                className="flex min-h-[32px] items-center gap-1 rounded-xl border border-[#0D6E52]/25 bg-white px-2.5 text-[11px] font-bold text-[#0D6E52] hover:bg-[#0D6E52]/10 dark:border-[#E7C57B]/30 dark:bg-black/25 dark:text-[#F6DC9B]"
+              >
+                <Volume2 className="h-3.5 w-3.5" />
+                <span>পূর্ণ উচ্চারণ শুনুন</span>
+              </button>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={voicePrefs.expandHonorifics}
+                onClick={() =>
+                  speechPlayer.updateVoicePrefs({
+                    expandHonorifics: !voicePrefs.expandHonorifics,
+                  })
+                }
+                className={`min-h-[32px] rounded-xl px-3 text-[11px] font-bold transition-colors ${
+                  voicePrefs.expandHonorifics
+                    ? 'bg-[#063D34] text-[#F6DC9B] shadow-xs dark:border dark:border-[#E7C57B]/40'
+                    : 'border border-black/15 bg-white/80 text-[#475A53] dark:border-white/15 dark:bg-white/[0.06] dark:text-[#9BB0A8]'
+                }`}
+              >
+                {voicePrefs.expandHonorifics ? 'চালু আছে' : 'বন্ধ'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

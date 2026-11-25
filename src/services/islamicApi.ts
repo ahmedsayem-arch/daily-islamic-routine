@@ -19,6 +19,8 @@ import type {
   PrayerTimeEntry,
   QariReciter,
   QuranAyahPair,
+  TafsirEditionId,
+  TafsirEditionMeta,
 } from '../types/islamic';
 
 import { formatBengaliTransliteration } from '../utils/quranFormatting';
@@ -760,6 +762,226 @@ export async function fetchFullWrittenRaheeqAlMakhtum(): Promise<{
       paragraphs: ch.paragraphsBn,
     }));
     return { sections: fallbackSections, isLive: false };
+  }
+}
+
+export const TAFSIR_EDITIONS: TafsirEditionMeta[] = [
+  {
+    id: 'zakaria',
+    nameBn: 'তাফসীরে আবু বকর যাকারিয়া',
+    authorBn: 'ড. আবু বকর মুহাম্মাদ যাকারিয়া · কিং ফাহদ কমপ্লেক্স',
+    slug: 'bn-tafsir-abu-bakr-zakaria',
+    quranComId: 166,
+    descBn: 'বাংলাদেশের সবচেয়ে প্রসিদ্ধ, বিশুদ্ধ ও প্রামাণ্য তাফসীর',
+  },
+  {
+    id: 'ibn_kathir',
+    nameBn: 'তাফসীরে ইবনে কাসীর',
+    authorBn: 'হাফিয ইবনে কাসীর (রহ.) · তাওহীদ পাবলিকেশন',
+    slug: 'bn-tafseer-ibn-e-kaseer',
+    quranComId: 164,
+    descBn: 'সহীহ হাদিস ও সাহাবীদের বর্ণনানির্ভর ক্লাসিক বিশুদ্ধ তাফসীর',
+  },
+  {
+    id: 'ahsanul_bayaan',
+    nameBn: 'তাফসীরে আহসানুল বায়ান',
+    authorBn: 'বায়ান ফাউন্ডেশন',
+    slug: 'bn-tafsir-ahsanul-bayaan',
+    quranComId: 165,
+    descBn: 'সংক্ষিপ্ত, প্রাঞ্জল ও বিশুদ্ধ তাফসীর',
+  },
+];
+
+export const TAFSIR_CACHE_NAME = 'quran-tafsir-cache-v1';
+const tafsirSurahCache = new Map<string, Record<number, string>>();
+
+function stripHtmlAndNormalizeTafsir(raw: string): string {
+  return String(raw || '')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6]|blockquote)>/gi, '\n\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function cleanTafsirForReading(raw: string): string[] {
+  const normalized = stripHtmlAndNormalizeTafsir(raw);
+  if (!normalized) return [];
+  return normalized
+    .split(/\n{2,}|\n/)
+    .map((p) => p.replace(/[ \t]+/g, ' ').trim())
+    .filter((p) => p.length > 0);
+}
+
+export function cleanTafsirForSpeech(raw: string): string {
+  const normalized = stripHtmlAndNormalizeTafsir(raw);
+  if (!normalized) return '';
+  return normalized
+    // Remove inline footnote brackets like [১], [২], [12] so TTS doesn't read raw numbers mid-sentence
+    .replace(/\[\s*[০-৯0-9]+\s*\]/g, ' ')
+    // Remove "(আরবি)" placeholder tokens used in some digitized editions
+    .replace(/\(\s*আরবি\s*\)/g, ' ')
+    // Clean up citation brackets into natural spoken pauses
+    .replace(/\[([^\]]+)\]/g, '। সূত্র: $1। ')
+    .replace(/\n+/g, '। ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function splitTafsirForSpeechSegments(
+  raw: string
+): Array<{ text: string; lang: 'bn-BD' | 'ar-SA' }> {
+  const cleaned = cleanTafsirForSpeech(raw);
+  if (!cleaned) return [];
+
+  // Match contiguous Arabic script phrases (minimum 2 Arabic letters so isolated diacritics don't split)
+  const arabicSpanRe =
+    /([\u0621-\u064A\u0671-\u06D3][\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\s]{1,}[\u0621-\u064A\u0671-\u06D3\u064B-\u065F\u0670])/g;
+
+  const segments: Array<{ text: string; lang: 'bn-BD' | 'ar-SA' }> = [];
+  let lastIdx = 0;
+  for (const match of cleaned.matchAll(arabicSpanRe)) {
+    const start = match.index ?? 0;
+    const arText = match[0].trim();
+    if (start > lastIdx) {
+      const bnPart = cleaned.slice(lastIdx, start).replace(/\s+/g, ' ').trim();
+      if (/[\p{L}\p{N}]/u.test(bnPart)) {
+        segments.push({ text: bnPart, lang: 'bn-BD' });
+      }
+    }
+    if (arText.length >= 2) {
+      segments.push({ text: arText, lang: 'ar-SA' });
+    }
+    lastIdx = start + match[0].length;
+  }
+
+  if (lastIdx < cleaned.length) {
+    const tail = cleaned.slice(lastIdx).replace(/\s+/g, ' ').trim();
+    if (/[\p{L}\p{N}]/u.test(tail)) {
+      segments.push({ text: tail, lang: 'bn-BD' });
+    }
+  }
+
+  return segments.length > 0 ? segments : [{ text: cleaned, lang: 'bn-BD' }];
+}
+
+export async function fetchSurahTafsir(
+  surahNumber: number,
+  editionId: TafsirEditionId = 'zakaria'
+): Promise<Record<number, string>> {
+  const meta = TAFSIR_EDITIONS.find((e) => e.id === editionId) || TAFSIR_EDITIONS[0];
+  const cacheKey = `${meta.id}:${surahNumber}`;
+  const memHit = tafsirSurahCache.get(cacheKey);
+  if (memHit) return memHit;
+
+  const cdnUrl = `https://cdn.jsdelivr.net/gh/spa5k/tafsir_api@main/tafsir/${meta.slug}/${surahNumber}.json`;
+
+  const parseCdnPayload = (payload: unknown): Record<number, string> => {
+    const map: Record<number, string> = {};
+    const list = Array.isArray(payload)
+      ? payload
+      : Array.isArray((payload as { ayahs?: unknown[] })?.ayahs)
+      ? (payload as { ayahs: unknown[] }).ayahs
+      : [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = item as { ayah?: number | string; verse_key?: string; text?: string };
+      let ayahNum = Number(rec.ayah);
+      if (!Number.isFinite(ayahNum) && typeof rec.verse_key === 'string') {
+        const parts = rec.verse_key.split(':');
+        ayahNum = Number(parts[1]);
+      }
+      if (Number.isFinite(ayahNum) && ayahNum > 0 && typeof rec.text === 'string' && rec.text.trim()) {
+        map[ayahNum] = rec.text.trim();
+      }
+    }
+    return map;
+  };
+
+  // 1. Check browser CacheStorage first for instant offline availability
+  try {
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      const cache = await window.caches.open(TAFSIR_CACHE_NAME);
+      const cachedRes = await cache.match(cdnUrl);
+      if (cachedRes && cachedRes.ok) {
+        const json = await cachedRes.json();
+        const parsed = parseCdnPayload(json);
+        if (Object.keys(parsed).length > 0) {
+          tafsirSurahCache.set(cacheKey, parsed);
+          return parsed;
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+
+  // 2. Fetch primary CDN (spa5k/tafsir_api)
+  try {
+    const res = await fetch(cdnUrl);
+    if (res.ok) {
+      const cloned = res.clone();
+      const json = await res.json();
+      const parsed = parseCdnPayload(json);
+      if (Object.keys(parsed).length > 0) {
+        tafsirSurahCache.set(cacheKey, parsed);
+        try {
+          if (typeof window !== 'undefined' && 'caches' in window) {
+            const cache = await window.caches.open(TAFSIR_CACHE_NAME);
+            await cache.put(cdnUrl, cloned);
+          }
+        } catch {
+          // ignore cache write failure
+        }
+        return parsed;
+      }
+    }
+  } catch {
+    // Fall through to api.quran.com fallback
+  }
+
+  // 3. Fallback: api.quran.com v4
+  try {
+    const qUrl = `https://api.quran.com/api/v4/tafsirs/${meta.quranComId}/by_chapter/${surahNumber}?per_page=300`;
+    const res = await fetch(qUrl);
+    if (res.ok) {
+      const json = await res.json();
+      const list = Array.isArray(json?.tafsirs) ? json.tafsirs : [];
+      const map: Record<number, string> = {};
+      for (const item of list) {
+        const keyParts = typeof item?.verse_key === 'string' ? item.verse_key.split(':') : [];
+        const ayahNum = Number(keyParts[1]);
+        if (Number.isFinite(ayahNum) && ayahNum > 0 && typeof item?.text === 'string' && item.text.trim()) {
+          map[ayahNum] = item.text.trim();
+        }
+      }
+      if (Object.keys(map).length > 0) {
+        tafsirSurahCache.set(cacheKey, map);
+        return map;
+      }
+    }
+  } catch {
+    // Throw below
+  }
+
+  throw new Error(`সূরা ${surahNumber}-এর তাফসীর লোড করা যায়নি`);
+}
+
+export async function prefetchSurahTafsirForOffline(
+  surahNumber: number,
+  editionId: TafsirEditionId = 'zakaria'
+): Promise<boolean> {
+  try {
+    const data = await fetchSurahTafsir(surahNumber, editionId);
+    return Object.keys(data).length > 0;
+  } catch {
+    return false;
   }
 }
 

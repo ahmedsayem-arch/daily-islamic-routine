@@ -87,6 +87,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   showBengaliTransliteration: true,
   showBengaliTranslation: true,
   showEnglishTranslation: false,
+  showTafsir: true,
+  tafsirEdition: 'zakaria',
   prayerMethod: 1,
   prayerSchool: 1,
   notificationsEnabled: false,
@@ -233,6 +235,7 @@ export default function App() {
   >(null);
 
   const [speechSourceContext, setSpeechSourceContext] = useState<
+    | { tab: 'quran'; viewMode: 'surah' | 'favorites'; surahNum: number }
     | { tab: 'hadith'; bookId: string | null; sectionNum: number | null }
     | {
         tab: 'seerah';
@@ -704,7 +707,13 @@ export default function App() {
     if (lastCapturedSpeechIdRef.current === trackId) return;
     lastCapturedSpeechIdRef.current = trackId;
 
-    if (activeTab === 'hadith') {
+    if (activeTab === 'quran') {
+      setSpeechSourceContext({
+        tab: 'quran',
+        viewMode: quranReaderState.viewMode,
+        surahNum: quranReaderState.selectedSurahNum,
+      });
+    } else if (activeTab === 'hadith') {
       setSpeechSourceContext({
         tab: 'hadith',
         bookId: hadithReaderState.selectedBookId,
@@ -733,6 +742,7 @@ export default function App() {
     speechSnap.status,
     speechSnap.currentTrack,
     activeTab,
+    quranReaderState,
     hadithReaderState,
     seerahReaderState,
     ruqyahReaderState,
@@ -1391,10 +1401,16 @@ export default function App() {
     speechSnap.status !== 'idle' &&
       speechSnap.currentTrack &&
       !showDockVoicePicker &&
-      ((activeTab === 'hadith' &&
-        speechSourceContext?.tab === 'hadith' &&
-        hadithReaderState.selectedBookId === speechSourceContext.bookId &&
-        hadithReaderState.selectedSectionNum === speechSourceContext.sectionNum) ||
+      ((activeTab === 'quran' &&
+        speechSourceContext?.tab === 'quran' &&
+        quranReaderState.viewMode === speechSourceContext.viewMode &&
+        (speechSourceContext.viewMode === 'favorites' ||
+          (quranReaderState.readerOpen &&
+            quranReaderState.selectedSurahNum === speechSourceContext.surahNum))) ||
+        (activeTab === 'hadith' &&
+          speechSourceContext?.tab === 'hadith' &&
+          hadithReaderState.selectedBookId === speechSourceContext.bookId &&
+          hadithReaderState.selectedSectionNum === speechSourceContext.sectionNum) ||
         (activeTab === 'seerah' &&
           speechSourceContext?.tab === 'seerah' &&
           seerahReaderState.readerOpen &&
@@ -1444,7 +1460,14 @@ export default function App() {
 
   const handleJumpToSpeechSource = useCallback(() => {
     if (!speechSourceContext) return;
-    if (speechSourceContext.tab === 'hadith') {
+    if (speechSourceContext.tab === 'quran') {
+      setQuranRouteIntent((prev) => ({
+        viewMode: speechSourceContext.viewMode,
+        surahNum: speechSourceContext.surahNum,
+        seq: (prev?.seq || 0) + 1,
+      }));
+      setActiveTab('quran');
+    } else if (speechSourceContext.tab === 'hadith') {
       setHadithRouteIntent((prev) => ({
         bookId: speechSourceContext.bookId,
         sectionNum: speechSourceContext.sectionNum,

@@ -1,4 +1,5 @@
 import { Constants, EdgeTTS } from '@andresaya/edge-tts';
+import { expandBanglaIslamicHonorifics } from '../src/utils/banglaHonorifics.ts';
 
 export type SupportedTtsLang = 'bn-BD' | 'ar-SA' | 'en-US';
 
@@ -18,8 +19,6 @@ const DEFAULT_MALE_VOICE_BY_LANG: Record<SupportedTtsLang, string> = {
   'ar-SA': 'ar-SA-HamedNeural',
   'en-US': 'en-US-AndrewNeural',
 };
-
-const edgeTts = new EdgeTTS();
 
 interface CachedAudioEntry {
   buffer: Uint8Array;
@@ -66,32 +65,21 @@ function formatEdgePitch(rawPitch: unknown): string {
   return `${hzOffset >= 0 ? '+' : ''}${hzOffset}Hz`;
 }
 
-function normalizeBanglaTtsText(rawText: string): string {
-  return rawText
-    .replace(/ﷺ/g, ' সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম ')
-    .replace(/\(\s*সা\.?\s*\)|\(\s*সাঃ\s*\)|\(\s*স\.\s*\)/g, ' সাল্লাল্লাহু আলাইহি ওয়া সাল্লাম ')
-    .replace(/\(\s*রা\.?\s*\)|\(\s*রাঃ\s*\)|\(\s*রাযি\.?\s*\)/g, ' রাদিয়াল্লাহু আনহু ')
-    .replace(/\(\s*আ\.?\s*\)|\(\s*আঃ\s*\)/g, ' আলাইহিস সালাম ')
-    .replace(/\(\s*রহ\.?\s*\)|\(\s*রহঃ\s*\)/g, ' রাহিমাহুল্লাহ ')
-    .replace(/[·•—–|/]+/g, ', ')
-    .replace(/\[([^\]]+)\]/g, ', $1, ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 export interface MaleTtsRequest {
   text: string;
   lang?: string;
   voice?: string;
   rate?: string | number;
   pitch?: string | number;
+  expandHonorifics?: boolean;
 }
 
 export async function synthesizeMaleTts(req: MaleTtsRequest): Promise<Uint8Array> {
   const lang = normalizeLang(req.lang);
+  const expandHonorifics = req.expandHonorifics !== false;
   const prepared =
     lang === 'bn-BD'
-      ? normalizeBanglaTtsText(req.text)
+      ? expandBanglaIslamicHonorifics(req.text, expandHonorifics)
       : req.text.replace(/\s+/g, ' ').trim();
   const cleanedText = prepared.slice(0, 800);
   if (!cleanedText) {
@@ -110,13 +98,24 @@ export async function synthesizeMaleTts(req: MaleTtsRequest): Promise<Uint8Array
     return cached.buffer;
   }
 
-  const result = await edgeTts.generate(cleanedText, voice, {
-    rate,
-    pitch,
-    volume: '+0%',
-    outputFormat: Constants.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
-    timeout: 15000,
-  });
+  const generateAudio = async (): Promise<Uint8Array> => {
+    const tts = new EdgeTTS();
+    const res = await tts.generate(cleanedText, voice, {
+      rate,
+      pitch,
+      volume: '+0%',
+      outputFormat: Constants.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
+      timeout: 15000,
+    });
+    return res.audio;
+  };
+
+  let audioBytes: Uint8Array;
+  try {
+    audioBytes = await generateAudio();
+  } catch {
+    audioBytes = await generateAudio();
+  }
 
   if (memoryCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = memoryCache.keys().next().value;
@@ -125,9 +124,9 @@ export async function synthesizeMaleTts(req: MaleTtsRequest): Promise<Uint8Array
     }
   }
   memoryCache.set(cacheKey, {
-    buffer: result.audio,
+    buffer: audioBytes,
     createdAt: Date.now(),
   });
 
-  return result.audio;
+  return audioBytes;
 }

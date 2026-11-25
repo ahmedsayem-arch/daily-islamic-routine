@@ -128,7 +128,21 @@ export default defineConfig(() => {
               options: {
                 cacheName: 'hadith-data-cache',
                 expiration: {
-                  maxEntries: 80,
+                  maxEntries: 250,
+                  maxAgeSeconds: 60 * 60 * 24 * 60,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/api\.quran\.com\/api\/v4\/tafsirs\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'quran-tafsir-api-cache',
+                expiration: {
+                  maxEntries: 120,
                   maxAgeSeconds: 60 * 60 * 24 * 60,
                 },
                 cacheableResponse: {
