@@ -62,12 +62,24 @@ interface RuqyahAmolViewProps {
   routeIntent?: {
     subTab: 'ruqyah' | 'manzil' | 'azkar';
     azkarFilter: 'all' | 'morning' | 'evening';
+    ruqyahId?: string | null;
+    manzilOpen?: boolean;
+    manzilGroup?: number | 'all';
+    azkarId?: string | null;
     seq: number;
   } | null;
   onChangeQari: (qari: QariReciter) => void;
   onUpdateSettings?: (patch: Partial<AppSettings>) => void;
   onPlayPlaylist: (tracks: AudioTrackItem[], startIndex: number, openVisual?: boolean) => void;
   onTogglePlay: () => void;
+  onReaderStateChange?: (state: {
+    subTab: 'ruqyah' | 'manzil' | 'azkar';
+    selectedRuqyahId: string | null;
+    manzilReaderOpen: boolean;
+    manzilGroupFilter: number | 'all';
+    hisnulChapter: string | null;
+    selectedAzkarId: string | null;
+  }) => void;
 }
 
 type SubTab = 'ruqyah' | 'manzil' | 'azkar';
@@ -195,13 +207,16 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   onUpdateSettings,
   onPlayPlaylist,
   onTogglePlay,
+  onReaderStateChange,
 }) => {
   const [subTab, setSubTab] = useState<SubTab>(routeIntent?.subTab || 'ruqyah');
   const [ruqyahCat, setRuqyahCat] = useState<RuqyahCat>('all');
   const [ruqyahQuery, setRuqyahQuery] = useState('');
 
   // Quran-style Reader state for Ruqyah Compilations
-  const [selectedRuqyahId, setSelectedRuqyahId] = useState<string | null>(null);
+  const [selectedRuqyahId, setSelectedRuqyahId] = useState<string | null>(
+    routeIntent?.subTab === 'ruqyah' ? (routeIntent.ruqyahId ?? null) : null
+  );
   const [activePlayingRuqyahId, setActivePlayingRuqyahId] = useState<string | null>(null);
   const [ruqyahTracks, setRuqyahTracks] = useState<AudioTrackItem[]>([]);
   const [ruqyahLoading, setRuqyahLoading] = useState(false);
@@ -210,8 +225,14 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   );
 
   // Quran-style Reader state for 33 Ayat (Manzil)
-  const [manzilReaderOpen, setManzilReaderOpen] = useState(false);
-  const [manzilGroupFilter, setManzilGroupFilter] = useState<number | 'all'>('all');
+  const [manzilReaderOpen, setManzilReaderOpen] = useState<boolean>(
+    routeIntent?.subTab === 'manzil' ? Boolean(routeIntent.manzilOpen) : false
+  );
+  const [manzilGroupFilter, setManzilGroupFilter] = useState<number | 'all'>(
+    routeIntent?.subTab === 'manzil' && routeIntent.manzilGroup !== undefined
+      ? routeIntent.manzilGroup
+      : 'all'
+  );
   const [manzilTracks, setManzilTracks] = useState<AudioTrackItem[]>([]);
   const [manzilLoading, setManzilLoading] = useState(false);
   const [manzilReaderStyle, setManzilReaderStyle] = useState<'translation' | 'arabicOnly'>(
@@ -222,7 +243,9 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   const [hisnulChapter, setHisnulChapter] = useState<HisnulChapterId | null>(
     routeIntent?.subTab === 'azkar' ? routeIntent.azkarFilter : null
   );
-  const [selectedAzkarId, setSelectedAzkarId] = useState<string | null>(null);
+  const [selectedAzkarId, setSelectedAzkarId] = useState<string | null>(
+    routeIntent?.subTab === 'azkar' ? (routeIntent.azkarId ?? null) : null
+  );
   const [azkarQuery, setAzkarQuery] = useState('');
   const [showAzkarVoicePanel, setShowAzkarVoicePanel] = useState(false);
 
@@ -246,12 +269,42 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   useEffect(() => {
     if (!routeIntent) return;
     setSubTab(routeIntent.subTab);
+    if (routeIntent.subTab === 'ruqyah' && routeIntent.ruqyahId !== undefined) {
+      setSelectedRuqyahId(routeIntent.ruqyahId);
+    }
+    if (routeIntent.subTab === 'manzil') {
+      if (routeIntent.manzilGroup !== undefined) {
+        setManzilGroupFilter(routeIntent.manzilGroup);
+      }
+      if (routeIntent.manzilOpen !== undefined) {
+        setManzilReaderOpen(routeIntent.manzilOpen);
+      }
+    }
     if (routeIntent.subTab === 'azkar') {
       setHisnulChapter(routeIntent.azkarFilter);
-      setSelectedAzkarId(null);
+      setSelectedAzkarId(routeIntent.azkarId ?? null);
       setAzkarQuery('');
     }
   }, [routeIntent]);
+
+  useEffect(() => {
+    onReaderStateChange?.({
+      subTab,
+      selectedRuqyahId,
+      manzilReaderOpen,
+      manzilGroupFilter,
+      hisnulChapter,
+      selectedAzkarId,
+    });
+  }, [
+    subTab,
+    selectedRuqyahId,
+    manzilReaderOpen,
+    manzilGroupFilter,
+    hisnulChapter,
+    selectedAzkarId,
+    onReaderStateChange,
+  ]);
 
   const getLocalTodayKey = () => {
     const d = new Date();

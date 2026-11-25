@@ -65,6 +65,16 @@ interface QuranViewProps {
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
   onPlayPlaylist: (tracks: AudioTrackItem[], startIndex: number, openVisual?: boolean) => void;
   onTogglePlay: () => void;
+  routeIntent?: {
+    viewMode: 'surah' | 'favorites';
+    surahNum?: number;
+    seq: number;
+  } | null;
+  onReaderStateChange?: (state: {
+    viewMode: 'surah' | 'favorites';
+    readerOpen: boolean;
+    selectedSurahNum: number;
+  }) => void;
 }
 
 const SUGGESTED_FAVORITES: Array<{
@@ -107,13 +117,22 @@ export const QuranView: React.FC<QuranViewProps> = ({
   onUpdateSettings,
   onPlayPlaylist,
   onTogglePlay,
+  routeIntent = null,
+  onReaderStateChange,
 }) => {
-  const [viewMode, setViewMode] = useState<'surah' | 'favorites'>('surah');
-  const [readerOpen, setReaderOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'surah' | 'favorites'>(
+    routeIntent?.viewMode || 'surah'
+  );
+  const [readerOpen, setReaderOpen] = useState<boolean>(
+    Boolean(routeIntent && routeIntent.viewMode === 'surah')
+  );
   const [readerStyle, setReaderStyle] = useState<'translation' | 'arabicOnly'>('translation');
   const [autoFollowAyah, setAutoFollowAyah] = useState(true);
   const ayahElementRefs = useRef<Map<string, HTMLElement>>(new Map());
   const [selectedSurahNum, setSelectedSurahNum] = useState<number>(() => {
+    if (routeIntent?.surahNum && routeIntent.surahNum >= 1 && routeIntent.surahNum <= 114) {
+      return routeIntent.surahNum;
+    }
     try {
       const saved = Number(localStorage.getItem('noor_last_surah') || '1');
       return saved >= 1 && saved <= 114 ? saved : 1;
@@ -202,6 +221,21 @@ export const QuranView: React.FC<QuranViewProps> = ({
       setPickTargetGroupId(activeGroupId);
     }
   }, [activeGroupId]);
+
+  useEffect(() => {
+    if (!routeIntent) return;
+    setViewMode(routeIntent.viewMode);
+    if (routeIntent.viewMode === 'surah') {
+      if (routeIntent.surahNum && routeIntent.surahNum >= 1 && routeIntent.surahNum <= 114) {
+        setSelectedSurahNum(routeIntent.surahNum);
+      }
+      setReaderOpen(true);
+    }
+  }, [routeIntent]);
+
+  useEffect(() => {
+    onReaderStateChange?.({ viewMode, readerOpen, selectedSurahNum });
+  }, [viewMode, readerOpen, selectedSurahNum, onReaderStateChange]);
 
   const filteredSurahs = useMemo(() => {
     const q = surahQuery.trim().toLowerCase();

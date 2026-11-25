@@ -29,6 +29,15 @@ interface HadithViewProps {
   arabicFontSize?: number;
   onUpdateSettings?: (patch: Partial<AppSettings>) => void;
   onNavigateTab?: (tab: ActiveTab) => void;
+  routeIntent?: {
+    bookId: string | null;
+    sectionNum: number | null;
+    seq: number;
+  } | null;
+  onReaderStateChange?: (state: {
+    selectedBookId: string | null;
+    selectedSectionNum: number | null;
+  }) => void;
 }
 
 interface HadithLangPrefs {
@@ -46,9 +55,15 @@ export const HadithView: React.FC<HadithViewProps> = ({
   arabicFontSize = 26,
   onUpdateSettings,
   onNavigateTab,
+  routeIntent = null,
+  onReaderStateChange,
 }) => {
-  const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
-  const [selectedSectionNum, setSelectedSectionNum] = useState<number | null>(null);
+  const [selectedBookId, setSelectedBookId] = useState<string | null>(
+    routeIntent?.bookId ?? null
+  );
+  const [selectedSectionNum, setSelectedSectionNum] = useState<number | null>(
+    routeIntent?.sectionNum ?? null
+  );
   const [lastPos, setLastPos] = useState<LastHadithPos | null>(() => {
     try {
       const raw = localStorage.getItem('noor_last_hadith_pos_v1');
@@ -125,6 +140,16 @@ export const HadithView: React.FC<HadithViewProps> = ({
       // ignore
     }
   }, [langPrefs]);
+
+  useEffect(() => {
+    if (!routeIntent) return;
+    setSelectedBookId(routeIntent.bookId);
+    setSelectedSectionNum(routeIntent.sectionNum);
+  }, [routeIntent]);
+
+  useEffect(() => {
+    onReaderStateChange?.({ selectedBookId, selectedSectionNum });
+  }, [selectedBookId, selectedSectionNum, onReaderStateChange]);
 
   useEffect(() => {
     if (!selectedBook || !activeSection) return;

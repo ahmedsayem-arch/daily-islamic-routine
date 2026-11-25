@@ -32,6 +32,21 @@ import { SmoothStage } from './SmoothTransition';
 interface SeerahViewProps {
   externalChapterIdx?: number | null;
   onNavigateTab?: (tab: ActiveTab) => void;
+  routeIntent?: {
+    topTab: 'books' | 'library';
+    selectedBook: 'full-book' | 'seerah' | null;
+    readerOpen: boolean;
+    selectedFullIdx?: number;
+    selectedSeerahIdx?: number;
+    seq: number;
+  } | null;
+  onReaderStateChange?: (state: {
+    topTab: 'books' | 'library';
+    selectedBook: 'full-book' | 'seerah' | null;
+    readerOpen: boolean;
+    selectedFullIdx: number;
+    selectedSeerahIdx: number;
+  }) => void;
 }
 
 type SeerahBookId = 'full-book' | 'seerah';
@@ -39,10 +54,18 @@ type SeerahBookId = 'full-book' | 'seerah';
 export const SeerahView: React.FC<SeerahViewProps> = ({
   externalChapterIdx = null,
   onNavigateTab,
+  routeIntent = null,
+  onReaderStateChange,
 }) => {
-  const [topTab, setTopTab] = useState<'books' | 'library'>('books');
-  const [selectedBook, setSelectedBook] = useState<SeerahBookId | null>(null);
-  const [readerOpen, setReaderOpen] = useState<boolean>(false);
+  const [topTab, setTopTab] = useState<'books' | 'library'>(
+    routeIntent?.topTab || 'books'
+  );
+  const [selectedBook, setSelectedBook] = useState<SeerahBookId | null>(
+    routeIntent?.selectedBook ?? null
+  );
+  const [readerOpen, setReaderOpen] = useState<boolean>(
+    routeIntent?.readerOpen ?? false
+  );
   const [showVoicePanel, setShowVoicePanel] = useState(false);
 
   // Full Written Book State (Ar-Raheeq Al-Makhtum Unicode Text)
@@ -50,6 +73,9 @@ export const SeerahView: React.FC<SeerahViewProps> = ({
   const [fullBookLoading, setFullBookLoading] = useState<boolean>(true);
   const [isLiveFullBook, setIsLiveFullBook] = useState<boolean>(false);
   const [selectedFullIdx, setSelectedFullIdx] = useState<number>(() => {
+    if (typeof routeIntent?.selectedFullIdx === 'number' && routeIntent.selectedFullIdx >= 0) {
+      return routeIntent.selectedFullIdx;
+    }
     try {
       const saved = Number(localStorage.getItem('noor_last_full_seerah_idx') || '0');
       return saved >= 0 ? saved : 0;
@@ -61,6 +87,13 @@ export const SeerahView: React.FC<SeerahViewProps> = ({
 
   // 12 Curated Chapters State
   const [selectedSeerahIdx, setSelectedSeerahIdx] = useState<number>(() => {
+    if (
+      typeof routeIntent?.selectedSeerahIdx === 'number' &&
+      routeIntent.selectedSeerahIdx >= 0 &&
+      routeIntent.selectedSeerahIdx < SEERAH_CHAPTERS.length
+    ) {
+      return routeIntent.selectedSeerahIdx;
+    }
     try {
       const saved = Number(localStorage.getItem('noor_last_seerah_idx') || '0');
       return saved >= 0 && saved < SEERAH_CHAPTERS.length ? saved : 0;
@@ -82,6 +115,33 @@ export const SeerahView: React.FC<SeerahViewProps> = ({
       setReaderOpen(true);
     }
   }, [externalChapterIdx]);
+
+  useEffect(() => {
+    if (!routeIntent) return;
+    setTopTab(routeIntent.topTab);
+    setSelectedBook(routeIntent.selectedBook);
+    setReaderOpen(routeIntent.readerOpen);
+    if (typeof routeIntent.selectedFullIdx === 'number' && routeIntent.selectedFullIdx >= 0) {
+      setSelectedFullIdx(routeIntent.selectedFullIdx);
+    }
+    if (
+      typeof routeIntent.selectedSeerahIdx === 'number' &&
+      routeIntent.selectedSeerahIdx >= 0 &&
+      routeIntent.selectedSeerahIdx < SEERAH_CHAPTERS.length
+    ) {
+      setSelectedSeerahIdx(routeIntent.selectedSeerahIdx);
+    }
+  }, [routeIntent]);
+
+  useEffect(() => {
+    onReaderStateChange?.({
+      topTab,
+      selectedBook,
+      readerOpen,
+      selectedFullIdx,
+      selectedSeerahIdx,
+    });
+  }, [topTab, selectedBook, readerOpen, selectedFullIdx, selectedSeerahIdx, onReaderStateChange]);
 
   useEffect(() => {
     try {

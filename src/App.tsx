@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import {
+  ArrowUpRight,
   Bell,
   BookMarked,
   BookOpen,
@@ -147,11 +148,105 @@ export default function App() {
     return 'routine';
   });
   const [isWidgetsOpen, setIsWidgetsOpen] = useState(false);
+  const [quranRouteIntent, setQuranRouteIntent] = useState<{
+    viewMode: 'surah' | 'favorites';
+    surahNum?: number;
+    seq: number;
+  } | null>(null);
+  const [hadithRouteIntent, setHadithRouteIntent] = useState<{
+    bookId: string | null;
+    sectionNum: number | null;
+    seq: number;
+  } | null>(null);
+  const [seerahRouteIntent, setSeerahRouteIntent] = useState<{
+    topTab: 'books' | 'library';
+    selectedBook: 'full-book' | 'seerah' | null;
+    readerOpen: boolean;
+    selectedFullIdx?: number;
+    selectedSeerahIdx?: number;
+    seq: number;
+  } | null>(null);
   const [ruqyahRouteIntent, setRuqyahRouteIntent] = useState<{
     subTab: 'ruqyah' | 'manzil' | 'azkar';
     azkarFilter: 'all' | 'morning' | 'evening';
+    ruqyahId?: string | null;
+    manzilOpen?: boolean;
+    manzilGroup?: number | 'all';
+    azkarId?: string | null;
     seq: number;
   } | null>(null);
+
+  const [quranReaderState, setQuranReaderState] = useState<{
+    viewMode: 'surah' | 'favorites';
+    readerOpen: boolean;
+    selectedSurahNum: number;
+  }>({ viewMode: 'surah', readerOpen: false, selectedSurahNum: 1 });
+
+  const [ruqyahReaderState, setRuqyahReaderState] = useState<{
+    subTab: 'ruqyah' | 'manzil' | 'azkar';
+    selectedRuqyahId: string | null;
+    manzilReaderOpen: boolean;
+    manzilGroupFilter: number | 'all';
+    hisnulChapter: string | null;
+    selectedAzkarId: string | null;
+  }>({
+    subTab: 'ruqyah',
+    selectedRuqyahId: null,
+    manzilReaderOpen: false,
+    manzilGroupFilter: 'all',
+    hisnulChapter: null,
+    selectedAzkarId: null,
+  });
+
+  const [hadithReaderState, setHadithReaderState] = useState<{
+    selectedBookId: string | null;
+    selectedSectionNum: number | null;
+  }>({ selectedBookId: null, selectedSectionNum: null });
+
+  const [seerahReaderState, setSeerahReaderState] = useState<{
+    topTab: 'books' | 'library';
+    selectedBook: 'full-book' | 'seerah' | null;
+    readerOpen: boolean;
+    selectedFullIdx: number;
+    selectedSeerahIdx: number;
+  }>({
+    topTab: 'books',
+    selectedBook: null,
+    readerOpen: false,
+    selectedFullIdx: 0,
+    selectedSeerahIdx: 0,
+  });
+
+  const [audioSourceContext, setAudioSourceContext] = useState<
+    | { tab: 'quran'; viewMode: 'surah' | 'favorites'; surahNum: number }
+    | {
+        tab: 'ruqyah';
+        subTab: 'ruqyah' | 'manzil' | 'azkar';
+        ruqyahId: string | null;
+        manzilOpen: boolean;
+        manzilGroup: number | 'all';
+      }
+    | null
+  >(null);
+
+  const [speechSourceContext, setSpeechSourceContext] = useState<
+    | { tab: 'hadith'; bookId: string | null; sectionNum: number | null }
+    | {
+        tab: 'seerah';
+        topTab: 'books' | 'library';
+        selectedBook: 'full-book' | 'seerah' | null;
+        readerOpen: boolean;
+        selectedFullIdx: number;
+        selectedSeerahIdx: number;
+      }
+    | {
+        tab: 'ruqyah';
+        azkarFilter: 'all' | 'morning' | 'evening';
+        azkarId: string | null;
+      }
+    | null
+  >(null);
+  const lastCapturedSpeechIdRef = useRef<string | null>(null);
   const [showDockVoicePicker, setShowDockVoicePicker] = useState(false);
   const [appTheme, setAppTheme] = useState<AppThemeId>(() => {
     try {
@@ -259,7 +354,8 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [audioStatus, setAudioStatus] = useState<AudioStatus>('idle');
   const [isLooping, setIsLooping] = useState<boolean>(false);
-  const [isVisualOpen, setIsVisualOpen] = useState<boolean>(false);
+  const [isPlayerExpanded, setIsPlayerExpanded] = useState<boolean>(false);
+  const [playbackSourceTab, setPlaybackSourceTab] = useState<'quran' | 'ruqyah' | null>(null);
   const [progress, setProgress] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -563,6 +659,50 @@ export default function App() {
   const speechSnap = useSpeechPlayer();
 
   useEffect(() => {
+    if (speechSnap.status === 'idle' || !speechSnap.currentTrack) {
+      lastCapturedSpeechIdRef.current = null;
+      setSpeechSourceContext(null);
+      return;
+    }
+    const trackId = speechSnap.currentTrack.id;
+    if (lastCapturedSpeechIdRef.current === trackId) return;
+    lastCapturedSpeechIdRef.current = trackId;
+
+    if (activeTab === 'hadith') {
+      setSpeechSourceContext({
+        tab: 'hadith',
+        bookId: hadithReaderState.selectedBookId,
+        sectionNum: hadithReaderState.selectedSectionNum,
+      });
+    } else if (activeTab === 'seerah') {
+      setSpeechSourceContext({
+        tab: 'seerah',
+        topTab: seerahReaderState.topTab,
+        selectedBook: seerahReaderState.selectedBook,
+        readerOpen: seerahReaderState.readerOpen,
+        selectedFullIdx: seerahReaderState.selectedFullIdx,
+        selectedSeerahIdx: seerahReaderState.selectedSeerahIdx,
+      });
+    } else if (activeTab === 'ruqyah') {
+      const ch = ruqyahReaderState.hisnulChapter;
+      const filter: 'all' | 'morning' | 'evening' =
+        ch === 'morning' || ch === 'evening' ? ch : 'all';
+      setSpeechSourceContext({
+        tab: 'ruqyah',
+        azkarFilter: filter,
+        azkarId: ruqyahReaderState.selectedAzkarId,
+      });
+    }
+  }, [
+    speechSnap.status,
+    speechSnap.currentTrack,
+    activeTab,
+    hadithReaderState,
+    seerahReaderState,
+    ruqyahReaderState,
+  ]);
+
+  useEffect(() => {
     return speechPlayer.onBeforeStart(() => {
       const audio = audioRef.current;
       if (audio && !audio.paused) {
@@ -688,7 +828,7 @@ export default function App() {
     }, [isPlaying, currentTrack]);
 
   const handlePlayPlaylist = useCallback(
-    (tracks: AudioTrackItem[], startIndex: number, openVisual = false) => {
+    (tracks: AudioTrackItem[], startIndex: number, _openVisual = false) => {
       if (tracks.length === 0) return;
       speechPlayer.stop();
       const target = tracks[startIndex] || tracks[0];
@@ -696,7 +836,24 @@ export default function App() {
       setCurrentIndex(startIndex);
       setIsPlaying(true);
       setAudioStatus('loading');
-      if (openVisual) setIsVisualOpen(true);
+      const sourceTab: 'quran' | 'ruqyah' = activeTab === 'ruqyah' ? 'ruqyah' : 'quran';
+      setPlaybackSourceTab(sourceTab);
+
+      if (sourceTab === 'quran') {
+        setAudioSourceContext({
+          tab: 'quran',
+          viewMode: quranReaderState.viewMode,
+          surahNum: target.surah || quranReaderState.selectedSurahNum,
+        });
+      } else {
+        setAudioSourceContext({
+          tab: 'ruqyah',
+          subTab: ruqyahReaderState.subTab,
+          ruqyahId: ruqyahReaderState.selectedRuqyahId,
+          manzilOpen: ruqyahReaderState.manzilReaderOpen,
+          manzilGroup: ruqyahReaderState.manzilGroupFilter,
+        });
+      }
 
       const audio = audioRef.current;
       if (audio) {
@@ -710,17 +867,7 @@ export default function App() {
           });
       }
     },
-    []
-  );
-
-  const handleSelectTrack = useCallback(
-    (index: number) => {
-      if (index < 0 || index >= playlist.length) return;
-      setCurrentIndex(index);
-      setIsPlaying(true);
-      setAudioStatus('loading');
-    },
-    [playlist.length]
+    [activeTab, quranReaderState, ruqyahReaderState]
   );
 
   const handlePrev = useCallback(() => {
@@ -750,12 +897,128 @@ export default function App() {
     }
     setIsPlaying(false);
     setAudioStatus('idle');
-    setIsVisualOpen(false);
+    setIsPlayerExpanded(false);
+    setPlaybackSourceTab(null);
+    setAudioSourceContext(null);
     setPlaylist([]);
     setCurrentIndex(0);
   }, []);
 
   const activeTrackKey = currentTrack ? `${currentTrack.surah}:${currentTrack.ayah}` : null;
+
+  const isAudioBarHidden = Boolean(
+    playlist.length > 0 &&
+      ((activeTab === 'quran' &&
+        ((audioSourceContext?.tab === 'quran' &&
+          audioSourceContext.viewMode === 'surah' &&
+          quranReaderState.viewMode === 'surah' &&
+          quranReaderState.readerOpen &&
+          quranReaderState.selectedSurahNum === audioSourceContext.surahNum) ||
+          (audioSourceContext?.tab === 'quran' &&
+            audioSourceContext.viewMode === 'favorites' &&
+            quranReaderState.viewMode === 'favorites') ||
+          (!audioSourceContext &&
+            quranReaderState.viewMode === 'surah' &&
+            quranReaderState.readerOpen &&
+            currentTrack?.surah === quranReaderState.selectedSurahNum))) ||
+        (activeTab === 'ruqyah' &&
+          ((ruqyahReaderState.subTab === 'ruqyah' &&
+            Boolean(ruqyahReaderState.selectedRuqyahId) &&
+            (!audioSourceContext ||
+              (audioSourceContext.tab === 'ruqyah' &&
+                audioSourceContext.subTab === 'ruqyah' &&
+                audioSourceContext.ruqyahId === ruqyahReaderState.selectedRuqyahId))) ||
+            (ruqyahReaderState.subTab === 'manzil' &&
+              ruqyahReaderState.manzilReaderOpen &&
+              (!audioSourceContext ||
+                (audioSourceContext.tab === 'ruqyah' &&
+                  audioSourceContext.subTab === 'manzil'))))))
+  );
+
+  const isSpeechDockHidden = Boolean(
+    speechSnap.status !== 'idle' &&
+      speechSnap.currentTrack &&
+      !showDockVoicePicker &&
+      ((activeTab === 'hadith' &&
+        speechSourceContext?.tab === 'hadith' &&
+        hadithReaderState.selectedBookId === speechSourceContext.bookId &&
+        hadithReaderState.selectedSectionNum === speechSourceContext.sectionNum) ||
+        (activeTab === 'seerah' &&
+          speechSourceContext?.tab === 'seerah' &&
+          seerahReaderState.readerOpen &&
+          seerahReaderState.selectedBook === speechSourceContext.selectedBook &&
+          (seerahReaderState.selectedBook === 'full-book'
+            ? seerahReaderState.selectedFullIdx === speechSourceContext.selectedFullIdx
+            : seerahReaderState.selectedSeerahIdx === speechSourceContext.selectedSeerahIdx)) ||
+        (activeTab === 'ruqyah' &&
+          speechSourceContext?.tab === 'ruqyah' &&
+          ruqyahReaderState.subTab === 'azkar' &&
+          (ruqyahReaderState.selectedAzkarId === speechSourceContext.azkarId ||
+            (speechSourceContext.azkarId === null &&
+              ruqyahReaderState.hisnulChapter === speechSourceContext.azkarFilter))))
+  );
+
+  const handleJumpToAudioSource = useCallback(() => {
+    if (audioSourceContext?.tab === 'quran' || playbackSourceTab === 'quran') {
+      const targetViewMode =
+        audioSourceContext?.tab === 'quran' ? audioSourceContext.viewMode : 'surah';
+      const targetSurahNum =
+        audioSourceContext?.tab === 'quran'
+          ? audioSourceContext.surahNum
+          : currentTrack?.surah;
+      setQuranRouteIntent((prev) => ({
+        viewMode: targetViewMode,
+        surahNum: targetSurahNum,
+        seq: (prev?.seq || 0) + 1,
+      }));
+      setActiveTab('quran');
+      return;
+    }
+
+    if (audioSourceContext?.tab === 'ruqyah' || playbackSourceTab === 'ruqyah') {
+      setRuqyahRouteIntent((prev) => ({
+        subTab: audioSourceContext?.tab === 'ruqyah' ? audioSourceContext.subTab : 'ruqyah',
+        azkarFilter: 'all',
+        ruqyahId: audioSourceContext?.tab === 'ruqyah' ? audioSourceContext.ruqyahId : undefined,
+        manzilOpen:
+          audioSourceContext?.tab === 'ruqyah' ? audioSourceContext.manzilOpen : undefined,
+        manzilGroup:
+          audioSourceContext?.tab === 'ruqyah' ? audioSourceContext.manzilGroup : undefined,
+        seq: (prev?.seq || 0) + 1,
+      }));
+      setActiveTab('ruqyah');
+    }
+  }, [audioSourceContext, playbackSourceTab, currentTrack]);
+
+  const handleJumpToSpeechSource = useCallback(() => {
+    if (!speechSourceContext) return;
+    if (speechSourceContext.tab === 'hadith') {
+      setHadithRouteIntent((prev) => ({
+        bookId: speechSourceContext.bookId,
+        sectionNum: speechSourceContext.sectionNum,
+        seq: (prev?.seq || 0) + 1,
+      }));
+      setActiveTab('hadith');
+    } else if (speechSourceContext.tab === 'seerah') {
+      setSeerahRouteIntent((prev) => ({
+        topTab: speechSourceContext.topTab,
+        selectedBook: speechSourceContext.selectedBook,
+        readerOpen: speechSourceContext.readerOpen,
+        selectedFullIdx: speechSourceContext.selectedFullIdx,
+        selectedSeerahIdx: speechSourceContext.selectedSeerahIdx,
+        seq: (prev?.seq || 0) + 1,
+      }));
+      setActiveTab('seerah');
+    } else if (speechSourceContext.tab === 'ruqyah') {
+      setRuqyahRouteIntent((prev) => ({
+        subTab: 'azkar',
+        azkarFilter: speechSourceContext.azkarFilter,
+        azkarId: speechSourceContext.azkarId,
+        seq: (prev?.seq || 0) + 1,
+      }));
+      setActiveTab('ruqyah');
+    }
+  }, [speechSourceContext]);
 
   useEffect(() => {
     try {
@@ -887,7 +1150,11 @@ export default function App() {
       {/* Main Content Container */}
       <main
         className={`mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-7 ${
-          playlist.length > 0 ? 'pb-36 md:pb-24' : 'pb-24 md:pb-12'
+          !isAudioBarHidden && playlist.length > 0
+            ? isPlayerExpanded
+              ? 'pb-60 md:pb-44'
+              : 'pb-36 md:pb-24'
+            : 'pb-24 md:pb-12'
         }`}
       >
         <AnimatePresence mode="wait" initial={false}>
@@ -945,6 +1212,8 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onPlayPlaylist={handlePlayPlaylist}
                 onTogglePlay={handleTogglePlay}
+                routeIntent={quranRouteIntent}
+                onReaderStateChange={setQuranReaderState}
               />
             )}
 
@@ -953,11 +1222,17 @@ export default function App() {
                 arabicFontSize={appSettings.arabicFontSize}
                 onUpdateSettings={handleUpdateSettings}
                 onNavigateTab={setActiveTab}
+                routeIntent={hadithRouteIntent}
+                onReaderStateChange={setHadithReaderState}
               />
             )}
 
             {activeTab === 'seerah' && (
-              <SeerahView onNavigateTab={setActiveTab} />
+              <SeerahView
+                onNavigateTab={setActiveTab}
+                routeIntent={seerahRouteIntent}
+                onReaderStateChange={setSeerahReaderState}
+              />
             )}
 
             {activeTab === 'ruqyah' && (
@@ -973,6 +1248,7 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onPlayPlaylist={handlePlayPlaylist}
                 onTogglePlay={handleTogglePlay}
+                onReaderStateChange={setRuqyahReaderState}
               />
             )}
 
@@ -1075,25 +1351,22 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Persistent Audio Player + Visual Recitation Modal */}
+      {/* Persistent Sticky Audio Dock (Expandable In-Place, hidden inside active reader) */}
       <AudioPlayerBar
         playlist={playlist}
         currentIndex={currentIndex}
         isPlaying={isPlaying}
         audioStatus={audioStatus}
         isLooping={isLooping}
-        isVisualOpen={isVisualOpen}
+        isExpanded={isPlayerExpanded}
         appTheme={appTheme}
         progress={progress}
         duration={duration}
         errorMsg={audioError}
-        arabicFontSize={appSettings.arabicFontSize}
-        tajweedColorCoding={appSettings.tajweedColorCoding}
-        showArabic={appSettings.showArabic}
-        showBengaliTransliteration={appSettings.showBengaliTransliteration}
-        showBengaliTranslation={appSettings.showBengaliTranslation}
-        showEnglishTranslation={appSettings.showEnglishTranslation}
         favoriteAyahKeys={favoriteAyahs.map((f) => f.key)}
+        hidden={isAudioBarHidden}
+        canJumpToSource={Boolean(audioSourceContext || playbackSourceTab)}
+        onJumpToSource={handleJumpToAudioSource}
         onToggleFavoriteTrack={(trackItem) => {
           const surahMeta =
             trackItem.titleBn.replace(/^সূরা\s+/, '').split('·')[0]?.trim() ||
@@ -1114,12 +1387,10 @@ export default function App() {
         onTogglePlay={handleTogglePlay}
         onPrev={handlePrev}
         onNext={handleNext}
-        onSelectTrack={handleSelectTrack}
         onToggleLoop={() => setIsLooping((l) => !l)}
         onSeek={handleSeek}
         onClosePlayer={handleClosePlayer}
-        onSetVisualOpen={setIsVisualOpen}
-        onCycleTheme={handleCycleTheme}
+        onSetExpanded={setIsPlayerExpanded}
       />
 
       {/* Digital Tasbih Modal */}
@@ -1151,10 +1422,10 @@ export default function App() {
       />
 
       {/* Floating Speech Narration Mini Dock (Hadith, Seerah, Azkar) */}
-      {speechSnap.status !== 'idle' && speechSnap.currentTrack && (
+      {speechSnap.status !== 'idle' && speechSnap.currentTrack && !isSpeechDockHidden && (
         <div
           className={`fixed left-3 right-3 z-40 mx-auto max-w-xl rounded-2xl border border-[#E7C57B]/30 bg-[#063D34]/95 p-3 text-white shadow-2xl backdrop-blur-xl md:bottom-5 ${
-            playlist.length > 0 ? 'bottom-[136px] md:bottom-24' : 'bottom-[72px]'
+            !isAudioBarHidden && playlist.length > 0 ? 'bottom-[136px] md:bottom-24' : 'bottom-[72px]'
           }`}
           role="region"
           aria-label="অডিও পঠন নিয়ন্ত্রণ"
@@ -1234,21 +1505,43 @@ export default function App() {
           )}
 
           <div className="flex items-center justify-between gap-2.5">
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <button
+              type="button"
+              onClick={speechSourceContext ? handleJumpToSpeechSource : undefined}
+              disabled={!speechSourceContext}
+              className={`flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-1 py-0.5 text-left transition-colors ${
+                speechSourceContext
+                  ? 'cursor-pointer hover:bg-white/10 active:scale-[0.99]'
+                  : 'cursor-default'
+              }`}
+              aria-label={
+                speechSourceContext
+                  ? `${speechSnap.currentTrack.titleBn} — ওই পাঠে ফিরে যান`
+                  : speechSnap.currentTrack.titleBn
+              }
+            >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#D4A853]/20 text-[#F6DC9B]">
                 <Volume2 className="h-4 w-4" />
               </div>
-              <div className="min-w-0">
-                <p className="truncate text-xs font-bold text-[#F6DC9B]">
-                  {speechSnap.currentTrack.titleBn}
-                </p>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-xs font-bold text-[#F6DC9B]">
+                    {speechSnap.currentTrack.titleBn}
+                  </p>
+                  {speechSourceContext && (
+                    <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-[#E7C57B]/20 px-1.5 py-0.5 text-[10px] font-bold text-[#F6DC9B]">
+                      <span>যান</span>
+                      <ArrowUpRight className="h-3 w-3" />
+                    </span>
+                  )}
+                </div>
                 <p className="truncate text-[11px] text-[#CBE2DA]">
                   {speechSnap.currentTrack.subtitleBn}
                   {speechSnap.tracks.length > 1 &&
                     ` · ${speechSnap.currentIndex + 1}/${speechSnap.tracks.length}`}
                 </p>
               </div>
-            </div>
+            </button>
 
             <div className="flex shrink-0 items-center gap-1">
               <button
