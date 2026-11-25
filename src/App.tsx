@@ -21,10 +21,6 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { DailyRoutineView } from './components/DailyRoutineView';
 import { HadithView } from './components/HadithView';
 import { OfflineIndicator } from './components/PWAInstallButton';
-import {
-  PrayerWidgetsModal,
-  StandaloneWidgetView,
-} from './components/PrayerWidgetsModal';
 import { QuranView } from './components/QuranView';
 import { RuqyahAmolView } from './components/RuqyahAmolView';
 import { SeerahView } from './components/SeerahView';
@@ -46,6 +42,19 @@ import type {
   FavoriteGroup,
   QariReciter,
 } from './types/islamic';
+import {
+  clearMediaSession,
+  registerMediaSessionHandlers,
+  setMediaSessionMetadata,
+  setMediaSessionPlaybackState,
+  updateMediaSessionPosition,
+} from './utils/mediaSessionHelper';
+import {
+  getFastPlayableAudioUrlSync,
+  invalidateResolvedAudioUrl,
+  prewarmUpcomingAudioUrls,
+  resolveAndPrewarmAudioUrl,
+} from './utils/offlineAudioCache';
 import {
   APP_THEMES,
   getArabicFontCss,
@@ -122,13 +131,6 @@ function mergeSavedSettings(rawObj: Partial<AppSettings> | null | undefined): Ap
 }
 
 export default function App() {
-  const [isWidgetMode, setIsWidgetMode] = useState<boolean>(() => {
-    try {
-      return new URLSearchParams(window.location.search).get('widget') === '1';
-    } catch {
-      return false;
-    }
-  });
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
     try {
       const tabParam = new URLSearchParams(window.location.search).get('tab');
@@ -147,7 +149,6 @@ export default function App() {
     }
     return 'routine';
   });
-  const [isWidgetsOpen, setIsWidgetsOpen] = useState(false);
   const [quranRouteIntent, setQuranRouteIntent] = useState<{
     viewMode: 'surah' | 'favorites';
     surahNum?: number;
@@ -645,16 +646,44 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => {
-    const audio = new Audio();
-    audio.preload = 'auto';
-    audioRef.current = audio;
+  const playlistRef = useRef<AudioTrackItem[]>([]);
+  const currentIndexRef = useRef<number>(0);
+  const isLoopingRef = useRef<boolean>(false);
+  const isPlayingRef = useRef<boolean>(false);
+  const activeLoadedRemoteUrlRef = useRef<string | null>(null);
+  const playAttemptIdRef = useRef<number>(0);
+  const ignorePauseEventRef = useRef<boolean>(false);
+  const activeTabRef = useRef<ActiveTab>(activeTab);
+  const quranReaderStateRef = useRef(quranReaderState);
+  const ruqyahReaderStateRef = useRef(ruqyahReaderState);
 
-    return () => {
-      audio.pause();
-      audio.src = '';
-    };
-  }, []);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
+    quranReaderStateRef.current = quranReaderState;
+  }, [quranReaderState]);
+
+  useEffect(() => {
+    ruqyahReaderStateRef.current = ruqyahReaderState;
+  }, [ruqyahReaderState]);
+
+  useEffect(() => {
+    playlistRef.current = playlist;
+  }, [playlist]);
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
+
+  useEffect(() => {
+    isLoopingRef.current = isLooping;
+  }, [isLooping]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   const speechSnap = useSpeechPlayer();
 
@@ -706,7 +735,12 @@ export default function App() {
     return speechPlayer.onBeforeStart(() => {
       const audio = audioRef.current;
       if (audio && !audio.paused) {
+        ignorePauseEventRef.current = true;
         audio.pause();
+        queueMicrotask(() => {
+          ignorePauseEventRef.current = false;
+        });
+        isPlayingRef.current = false;
         setIsPlaying(false);
         setAudioStatus('paused');
       }
@@ -714,6 +748,88 @@ export default function App() {
   }, []);
 
   const currentTrack = playlist[currentIndex] || null;
+
+  const startTrackOnAudioElement = useCallback(
+    (track: AudioTrackItem, idx: number, shouldPlay: boolean) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+
+      const attemptId = ++playAttemptIdRef.current;
+
+      const upcoming: string[] = [track.audioUrl];
+      for (let offset = 1; offset <= 4; offset += 1) {
+        const nextUrl = playlistRef.current[idx + offset]?.audioUrl;
+        if (nextUrl) upcoming.push(nextUrl);
+      }
+      prewarmUpcomingAudioUrls(upcoming);
+
+      const fastSrc = getFastPlayableAudioUrlSync(track.audioUrl);
+      activeLoadedRemoteUrlRef.current = track.audioUrl;
+
+      const needsSrcUpdate =
+        audio.src !== fastSrc ||
+        Boolean(audio.error) ||
+        audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
+
+      if (needsSrcUpdate) {
+        ignorePauseEventRef.current = true;
+        audio.src = fastSrc;
+        if (audio.error) {
+          audio.load();
+        }
+        queueMicrotask(() => {
+          ignorePauseEventRef.current = false;
+        });
+      }
+
+      setMediaSessionMetadata({
+        title: track.titleBn,
+        artist: track.subtitleBn,
+        album: 'Daily Islamic Routine',
+      });
+
+      if (fastSrc === track.audioUrl) {
+        void resolveAndPrewarmAudioUrl(track.audioUrl).then((resolved) => {
+          if (
+            resolved !== track.audioUrl &&
+            attemptId === playAttemptIdRef.current &&
+            audio.error &&
+            isPlayingRef.current
+          ) {
+            ignorePauseEventRef.current = true;
+            audio.src = resolved;
+            queueMicrotask(() => {
+              ignorePauseEventRef.current = false;
+            });
+            audio.play().catch(() => {});
+          }
+        });
+      }
+
+      if (shouldPlay) {
+        setMediaSessionPlaybackState('playing');
+        setAudioStatus('loading');
+        audio
+          .play()
+          .then(() => {
+            if (attemptId !== playAttemptIdRef.current) return;
+            setAudioStatus('playing');
+          })
+          .catch((err: unknown) => {
+            if (attemptId !== playAttemptIdRef.current) return;
+            const errName =
+              err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+            if (errName === 'AbortError') return;
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            setAudioStatus('paused');
+            setMediaSessionPlaybackState('paused');
+            setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
+          });
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -723,60 +839,118 @@ export default function App() {
     setProgress(0);
     setDuration(0);
 
-    if (audio.src !== currentTrack.audioUrl) {
-      audio.src = currentTrack.audioUrl;
+    if (activeLoadedRemoteUrlRef.current === currentTrack.audioUrl) {
+      setMediaSessionMetadata({
+        title: currentTrack.titleBn,
+        artist: currentTrack.subtitleBn,
+        album: 'Daily Islamic Routine',
+      });
+      return;
     }
 
-    if (isPlaying) {
-      setAudioStatus('loading');
-      audio.play().catch(() => {
-        setIsPlaying(false);
-        setAudioStatus('paused');
-        setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
-      });
-    }
-  }, [currentTrack]); // eslint-disable-line react-hooks/exhaustive-deps
+    startTrackOnAudioElement(currentTrack, currentIndex, isPlayingRef.current);
+  }, [currentTrack, currentIndex, startTrackOnAudioElement]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const handleLoadStart = () => {
-      if (isPlaying) setAudioStatus('loading');
+      if (isPlayingRef.current) setAudioStatus('loading');
     };
     const handleWaiting = () => {
-      if (isPlaying) setAudioStatus('loading');
+      if (isPlayingRef.current) setAudioStatus('loading');
     };
     const handlePlaying = () => {
+      ignorePauseEventRef.current = false;
+      isPlayingRef.current = true;
+      setIsPlaying(true);
       setAudioStatus('playing');
       setAudioError(null);
+      setMediaSessionPlaybackState('playing');
     };
     const handlePause = () => {
-      if (!audio.ended) {
-        setAudioStatus(playlist.length > 0 ? 'paused' : 'idle');
+      if (!audio.ended && audio.paused && !ignorePauseEventRef.current) {
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        setAudioStatus(playlistRef.current.length > 0 ? 'paused' : 'idle');
+        if (
+          playlistRef.current.length > 0 &&
+          speechPlayer.getSnapshot().status !== 'playing'
+        ) {
+          setMediaSessionPlaybackState('paused');
+        }
       }
     };
     const handleTimeUpdate = () => {
-      setProgress(audio.currentTime || 0);
-      setDuration(audio.duration || 0);
+      const cur = audio.currentTime || 0;
+      const dur = audio.duration || 0;
+      setProgress(cur);
+      setDuration(dur);
+      if (dur > 0) {
+        updateMediaSessionPosition(dur, cur, audio.playbackRate || 1);
+      }
     };
     const handleEnded = () => {
-      if (currentIndex < playlist.length - 1) {
-        setCurrentIndex((i) => i + 1);
-      } else if (isLooping && playlist.length > 0) {
+      const list = playlistRef.current;
+      const curIdx = currentIndexRef.current;
+      if (curIdx < list.length - 1) {
+        const nextIdx = curIdx + 1;
+        const nextTrack = list[nextIdx];
+        currentIndexRef.current = nextIdx;
+        isPlayingRef.current = true;
+        startTrackOnAudioElement(nextTrack, nextIdx, true);
+        setCurrentIndex(nextIdx);
+      } else if (isLoopingRef.current && list.length > 0) {
+        const nextTrack = list[0];
+        currentIndexRef.current = 0;
+        isPlayingRef.current = true;
+        startTrackOnAudioElement(nextTrack, 0, true);
         setCurrentIndex(0);
       } else {
+        isPlayingRef.current = false;
         setIsPlaying(false);
         setAudioStatus('paused');
+        setMediaSessionPlaybackState('paused');
       }
     };
     const handleError = () => {
+      const list = playlistRef.current;
+      if (list.length === 0) return;
+      const curIdx = currentIndexRef.current;
+      const curTrack = list[curIdx];
+      const attemptAtError = playAttemptIdRef.current;
+
+      // If a cached blob: URL failed to decode, fall back to the original remote URL once
+      if (curTrack && audio.src.startsWith('blob:') && curTrack.audioUrl) {
+        invalidateResolvedAudioUrl(curTrack.audioUrl);
+        ignorePauseEventRef.current = true;
+        audio.src = curTrack.audioUrl;
+        queueMicrotask(() => {
+          ignorePauseEventRef.current = false;
+        });
+        if (isPlayingRef.current) {
+          audio.play().catch(() => {});
+        }
+        return;
+      }
+
       setAudioStatus('error');
       setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
-      if (currentIndex < playlist.length - 1) {
-        setTimeout(() => setCurrentIndex((i) => i + 1), 800);
+      if (curIdx < list.length - 1) {
+        const nextIdx = curIdx + 1;
+        setTimeout(() => {
+          if (attemptAtError !== playAttemptIdRef.current || !isPlayingRef.current) return;
+          const nextTrack = playlistRef.current[nextIdx];
+          if (!nextTrack) return;
+          currentIndexRef.current = nextIdx;
+          startTrackOnAudioElement(nextTrack, nextIdx, true);
+          setCurrentIndex(nextIdx);
+        }, 700);
       } else {
+        isPlayingRef.current = false;
         setIsPlaying(false);
+        setMediaSessionPlaybackState('paused');
       }
     };
 
@@ -799,102 +973,153 @@ export default function App() {
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
     };
-  }, [currentIndex, playlist.length, isLooping, isPlaying]);
+  }, [startTrackOnAudioElement]);
 
   const handleTogglePlay = useCallback(() => {
-      const audio = audioRef.current;
-      if (!audio || !currentTrack) return;
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) return;
 
-      if (isPlaying) {
-        audio.pause();
-        setIsPlaying(false);
-        setAudioStatus('paused');
-      } else {
-        speechPlayer.stop();
-        setAudioError(null);
-        setAudioStatus('loading');
-        audio
-          .play()
-          .then(() => {
-            setIsPlaying(true);
-            setAudioStatus('playing');
-          })
-          .catch(() => {
-            setAudioError('অডিও স্ট্রিম সংযোগ করা যায়নি');
-            setIsPlaying(false);
-            setAudioStatus('error');
-          });
+    if (isPlayingRef.current) {
+      audio.pause();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      setAudioStatus('paused');
+      setMediaSessionPlaybackState('paused');
+    } else {
+      speechPlayer.stop();
+      setAudioError(null);
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+
+      if (
+        audio.error ||
+        !audio.src ||
+        audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
+      ) {
+        startTrackOnAudioElement(currentTrack, currentIndexRef.current, true);
+        return;
       }
-    }, [isPlaying, currentTrack]);
+
+      const attemptId = ++playAttemptIdRef.current;
+      setAudioStatus('loading');
+      setMediaSessionMetadata({
+        title: currentTrack.titleBn,
+        artist: currentTrack.subtitleBn,
+        album: 'Daily Islamic Routine',
+      });
+      setMediaSessionPlaybackState('playing');
+      audio
+        .play()
+        .then(() => {
+          if (attemptId !== playAttemptIdRef.current) return;
+          setAudioStatus('playing');
+        })
+        .catch((err: unknown) => {
+          if (attemptId !== playAttemptIdRef.current) return;
+          const errName =
+            err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+          if (errName === 'AbortError') return;
+          setAudioError('অডিও স্ট্রিম সংযোগ করা যায়নি');
+          isPlayingRef.current = false;
+          setIsPlaying(false);
+          setAudioStatus('error');
+          setMediaSessionPlaybackState('paused');
+        });
+    }
+  }, [currentTrack, startTrackOnAudioElement]);
 
   const handlePlayPlaylist = useCallback(
     (tracks: AudioTrackItem[], startIndex: number, _openVisual = false) => {
       if (tracks.length === 0) return;
       speechPlayer.stop();
-      const target = tracks[startIndex] || tracks[0];
+      const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
+      const target = tracks[safeIndex] || tracks[0];
+      playlistRef.current = tracks;
+      currentIndexRef.current = safeIndex;
+      isPlayingRef.current = true;
       setPlaylist(tracks);
-      setCurrentIndex(startIndex);
+      setCurrentIndex(safeIndex);
       setIsPlaying(true);
       setAudioStatus('loading');
-      const sourceTab: 'quran' | 'ruqyah' = activeTab === 'ruqyah' ? 'ruqyah' : 'quran';
+      const sourceTab: 'quran' | 'ruqyah' =
+        activeTabRef.current === 'ruqyah' ? 'ruqyah' : 'quran';
       setPlaybackSourceTab(sourceTab);
 
       if (sourceTab === 'quran') {
+        const qs = quranReaderStateRef.current;
         setAudioSourceContext({
           tab: 'quran',
-          viewMode: quranReaderState.viewMode,
-          surahNum: target.surah || quranReaderState.selectedSurahNum,
+          viewMode: qs.viewMode,
+          surahNum: target.surah || qs.selectedSurahNum,
         });
       } else {
+        const rs = ruqyahReaderStateRef.current;
         setAudioSourceContext({
           tab: 'ruqyah',
-          subTab: ruqyahReaderState.subTab,
-          ruqyahId: ruqyahReaderState.selectedRuqyahId,
-          manzilOpen: ruqyahReaderState.manzilReaderOpen,
-          manzilGroup: ruqyahReaderState.manzilGroupFilter,
+          subTab: rs.subTab,
+          ruqyahId: rs.selectedRuqyahId,
+          manzilOpen: rs.manzilReaderOpen,
+          manzilGroup: rs.manzilGroupFilter,
         });
       }
 
-      const audio = audioRef.current;
-      if (audio) {
-        audio.src = target.audioUrl;
-        audio
-          .play()
-          .then(() => setAudioStatus('playing'))
-          .catch(() => {
-            setIsPlaying(false);
-            setAudioStatus('paused');
-          });
-      }
+      startTrackOnAudioElement(target, safeIndex, true);
     },
-    [activeTab, quranReaderState, ruqyahReaderState]
+    [startTrackOnAudioElement]
   );
 
   const handlePrev = useCallback(() => {
-    setCurrentIndex((i) => Math.max(0, i - 1));
+    const nextIdx = Math.max(0, currentIndexRef.current - 1);
+    const target = playlistRef.current[nextIdx];
+    currentIndexRef.current = nextIdx;
+    isPlayingRef.current = true;
+    setCurrentIndex(nextIdx);
     setIsPlaying(true);
     setAudioStatus('loading');
-  }, []);
+    if (target) {
+      startTrackOnAudioElement(target, nextIdx, true);
+    }
+  }, [startTrackOnAudioElement]);
 
   const handleNext = useCallback(() => {
-    setCurrentIndex((i) => Math.min(playlist.length - 1, i + 1));
+    const nextIdx = Math.min(playlistRef.current.length - 1, currentIndexRef.current + 1);
+    const target = playlistRef.current[nextIdx];
+    currentIndexRef.current = nextIdx;
+    isPlayingRef.current = true;
+    setCurrentIndex(nextIdx);
     setIsPlaying(true);
     setAudioStatus('loading');
-  }, [playlist.length]);
+    if (target) {
+      startTrackOnAudioElement(target, nextIdx, true);
+    }
+  }, [startTrackOnAudioElement]);
 
   const handleSeek = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = time;
     setProgress(time);
+    if (audio.duration > 0) {
+      updateMediaSessionPosition(audio.duration, time, audio.playbackRate || 1);
+    }
   }, []);
 
   const handleClosePlayer = useCallback(() => {
+    playAttemptIdRef.current += 1;
     const audio = audioRef.current;
     if (audio) {
+      ignorePauseEventRef.current = true;
       audio.pause();
-      audio.src = '';
+      audio.removeAttribute('src');
+      audio.load();
+      queueMicrotask(() => {
+        ignorePauseEventRef.current = false;
+      });
     }
+    activeLoadedRemoteUrlRef.current = null;
+    isPlayingRef.current = false;
+    playlistRef.current = [];
+    currentIndexRef.current = 0;
     setIsPlaying(false);
     setAudioStatus('idle');
     setIsPlayerExpanded(false);
@@ -902,7 +1127,34 @@ export default function App() {
     setAudioSourceContext(null);
     setPlaylist([]);
     setCurrentIndex(0);
+    if (speechPlayer.getSnapshot().status === 'idle') {
+      clearMediaSession();
+    }
   }, []);
+
+  useEffect(() => {
+    if (playlist.length === 0) return;
+    registerMediaSessionHandlers({
+      onPlay: () => {
+        if (!isPlayingRef.current) handleTogglePlay();
+      },
+      onPause: () => {
+        if (isPlayingRef.current) handleTogglePlay();
+      },
+      onPrev: currentIndex > 0 ? handlePrev : undefined,
+      onNext: currentIndex < playlist.length - 1 ? handleNext : undefined,
+      onSeekTo: handleSeek,
+      onStop: handleClosePlayer,
+    });
+  }, [
+    playlist.length,
+    currentIndex,
+    handleTogglePlay,
+    handlePrev,
+    handleNext,
+    handleSeek,
+    handleClosePlayer,
+  ]);
 
   const activeTrackKey = currentTrack ? `${currentTrack.surah}:${currentTrack.ayah}` : null;
 
@@ -1028,68 +1280,10 @@ export default function App() {
     }
   }, [activeTab]);
 
-  if (isWidgetMode) {
-    return (
-      <MotionConfig reducedMotion="user">
-        <StandaloneWidgetView
-          schedule={schedule}
-          settings={appSettings}
-          selectedCityId={selectedCityId}
-          onChangeCityId={handleChangeCityId}
-          onToggleNotifications={handleToggleMasterNotification}
-          onExitWidgetMode={() => {
-            setIsWidgetMode(false);
-            try {
-              const url = new URL(window.location.href);
-              url.searchParams.delete('widget');
-              window.history.replaceState({}, '', url.pathname + url.search);
-            } catch {
-              // ignore
-            }
-          }}
-          onInAppAlert={handleInAppAlert}
-        />
-        <AnimatePresence>
-          {inAppAlert && (
-            <motion.div
-              key={inAppAlert.id}
-              initial={{ opacity: 0, y: -16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              role="status"
-              aria-live="polite"
-              className="fixed left-4 right-4 top-6 z-50 mx-auto max-w-md rounded-2xl border border-[#E7C57B]/50 bg-[#063D34]/95 p-4 text-white shadow-2xl backdrop-blur-xl"
-            >
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D4A853]/20 text-[#F6DC9B]">
-                  <Bell className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-[#F6DC9B]">{inAppAlert.title}</p>
-                  <p className="mt-0.5 text-xs leading-relaxed text-[#E2EFEA]">
-                    {inAppAlert.body}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setInAppAlert(null)}
-                  className="flex min-h-[36px] min-w-[36px] shrink-0 items-center justify-center rounded-lg text-[#CBE2DA] hover:bg-white/10 hover:text-white"
-                  aria-label="নোটিফিকেশন বন্ধ করুন"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </MotionConfig>
-    );
-  }
-
   return (
     <MotionConfig reducedMotion="user">
     <div className="bg-sanctuary-canvas min-h-screen text-[#0F1F1A] transition-colors dark:text-[#F0F5F3]">
+      <audio ref={audioRef} playsInline preload="auto" />
       <OfflineIndicator />
       {/* Strict 3-Zone Frosted Glass Navigation Bar */}
       <header className="app-chrome-bar sticky top-0 z-30 border-b border-[#0D6E52]/10 bg-white/85 backdrop-blur-2xl transition-colors dark:border-[#E7C57B]/10 dark:bg-[#050E0C]/80">
@@ -1191,7 +1385,6 @@ export default function App() {
                   }
                 }}
                 onOpenTasbih={() => setIsTasbihOpen(true)}
-                onOpenWidgets={() => setIsWidgetsOpen(true)}
               />
             )}
 
@@ -1268,7 +1461,6 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onToggleMasterNotification={handleToggleMasterNotification}
                 onResetDefaults={handleResetSettings}
-                onOpenWidgets={() => setIsWidgetsOpen(true)}
               />
             )}
           </motion.div>
@@ -1398,27 +1590,6 @@ export default function App() {
         isOpen={isTasbihOpen}
         onClose={() => setIsTasbihOpen(false)}
         apiHijriParts={schedule.hijriParts}
-      />
-
-      {/* Prayer Times, Dates & Reminder Widgets Studio */}
-      <PrayerWidgetsModal
-        isOpen={isWidgetsOpen}
-        onClose={() => setIsWidgetsOpen(false)}
-        schedule={schedule}
-        settings={appSettings}
-        onToggleNotifications={handleToggleMasterNotification}
-        onOpenStandaloneWidget={() => {
-          setIsWidgetsOpen(false);
-          setIsWidgetMode(true);
-          try {
-            const url = new URL(window.location.href);
-            url.searchParams.set('widget', '1');
-            window.history.replaceState({}, '', url.pathname + url.search);
-          } catch {
-            // ignore
-          }
-        }}
-        onInAppAlert={handleInAppAlert}
       />
 
       {/* Floating Speech Narration Mini Dock (Hadith, Seerah, Azkar) */}

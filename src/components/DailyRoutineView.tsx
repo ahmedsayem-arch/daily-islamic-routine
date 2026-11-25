@@ -8,7 +8,6 @@ import {
   Check,
   Clock,
   Compass,
-  LayoutGrid,
   MapPin,
   Minus,
   Moon,
@@ -59,7 +58,6 @@ interface DailyRoutineViewProps {
     azkarFilter?: 'all' | 'morning' | 'evening'
   ) => void;
   onOpenTasbih: () => void;
-  onOpenWidgets?: () => void;
 }
 
 const WAQT_FILTERS: Array<{ id: 'all' | RoutineWaqt; label: string }> = [
@@ -113,7 +111,6 @@ export const DailyRoutineView: React.FC<DailyRoutineViewProps> = ({
   onNavigateTab,
   onOpenAmol,
   onOpenTasbih,
-  onOpenWidgets,
 }) => {
   const [now, setNow] = useState<Date>(() => new Date());
   const [heroImgError, setHeroImgError] = useState(false);
@@ -316,27 +313,14 @@ export const DailyRoutineView: React.FC<DailyRoutineViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
-          <div className="flex items-center gap-2">
-            {onOpenWidgets && (
-              <button
-                type="button"
-                onClick={onOpenWidgets}
-                className="flex min-h-[36px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#D4A853]/35 bg-[#D4A853]/12 px-3 text-xs font-bold text-[#745118] shadow-sm transition-colors hover:bg-[#D4A853]/20 dark:border-[#E7C57B]/35 dark:bg-[#E7C57B]/15 dark:text-[#F6DC9B] dark:hover:bg-[#E7C57B]/25"
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                <span>উইজেট</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setIsCalendarOpen(true)}
-              className="flex min-h-[36px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#0D6E52]/25 bg-white px-3 text-xs font-bold text-[#063D34] shadow-sm transition-colors hover:border-[#0D6E52]/50 hover:bg-[#0D6E52]/5 dark:border-[#E7C57B]/30 dark:bg-white/10 dark:text-[#F6DC9B] dark:hover:bg-white/15"
-            >
-              <Calendar className="h-3.5 w-3.5 text-[#0D6E52] dark:text-[#6EE7B7]" />
-              <span>সব ক্যালেন্ডার</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setIsCalendarOpen(true)}
+            className="flex min-h-[36px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#0D6E52]/25 bg-white px-3 text-xs font-bold text-[#063D34] shadow-sm transition-colors hover:border-[#0D6E52]/50 hover:bg-[#0D6E52]/5 dark:border-[#E7C57B]/30 dark:bg-white/10 dark:text-[#F6DC9B] dark:hover:bg-white/15"
+          >
+            <Calendar className="h-3.5 w-3.5 text-[#0D6E52] dark:text-[#6EE7B7]" />
+            <span>সব ক্যালেন্ডার</span>
+          </button>
 
           <p
             dir="rtl"

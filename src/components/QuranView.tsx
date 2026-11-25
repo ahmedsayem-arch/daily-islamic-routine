@@ -45,6 +45,7 @@ import {
 import {
   countCachedAudioUrls,
   downloadAudioUrlsForOffline,
+  prewarmUpcomingAudioUrls,
 } from '../utils/offlineAudioCache';
 import { TajweedArabicText } from './TajweedArabicText';
 import { SmoothStage } from './SmoothTransition';
@@ -289,7 +290,12 @@ export const QuranView: React.FC<QuranViewProps> = ({
       return;
     }
     countCachedAudioUrls(ayahs.map((a) => a.audioUrl)).then((cnt) => {
-      if (active) setOfflineSavedCount(cnt);
+      if (active) {
+        setOfflineSavedCount(cnt);
+        if (cnt > 0) {
+          prewarmUpcomingAudioUrls(ayahs.slice(0, 3).map((a) => a.audioUrl));
+        }
+      }
     });
     return () => {
       active = false;

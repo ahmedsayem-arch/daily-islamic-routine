@@ -29,12 +29,6 @@ export default defineConfig(() => {
           scope: '/',
           shortcuts: [
             {
-              name: 'নামাজ ও তারিখ উইজেট',
-              short_name: 'উইজেট',
-              url: '/?widget=1',
-              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
-            },
-            {
               name: 'কুরআন মাজীদ',
               short_name: 'কুরআন',
               url: '/?tab=quran',

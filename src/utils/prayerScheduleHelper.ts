@@ -3,7 +3,6 @@ import {
   computeSehriEndFromFajr,
   type PrayerScheduleResult,
 } from '../services/islamicApi';
-import type { AppSettings } from '../types/islamic';
 import { formatTime12h } from './timeFormat';
 
 export interface WaqtSlotItem {
@@ -29,17 +28,6 @@ export interface ActiveWaqtStatus {
   sunrise: string;
   iftarTime: string;
   slots: WaqtSlotItem[];
-}
-
-export interface ReminderScheduleItem {
-  id: string;
-  kind: 'prayer' | 'routine';
-  labelBn: string;
-  timeHHMM: string;
-  time12Bn: string;
-  enabled: boolean;
-  leadNoteBn?: string;
-  isNextUpcoming: boolean;
 }
 
 export function timeToSeconds(hhmm: string): number {
@@ -268,95 +256,5 @@ export function getActiveWaqtStatus(
     sunrise,
     iftarTime: maghrib,
     slots,
-  };
-}
-
-export function getWidgetReminderSummary(
-  schedule: PrayerScheduleResult,
-  settings: AppSettings,
-  now: Date
-): {
-  items: ReminderScheduleItem[];
-  nextUpcoming: ReminderScheduleItem | null;
-} {
-  const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  const prayerKeys: Array<{
-    key: keyof AppSettings['prayerReminders'];
-    labelBn: string;
-  }> = [
-    { key: 'Fajr', labelBn: 'ফজর' },
-    { key: 'Dhuhr', labelBn: 'যোহর' },
-    { key: 'Asr', labelBn: 'আসর' },
-    { key: 'Maghrib', labelBn: 'মাগরিব' },
-    { key: 'Isha', labelBn: 'ইশা' },
-  ];
-
-  const rawItems: Array<ReminderScheduleItem & { sortSecs: number }> = [];
-
-  for (const p of prayerKeys) {
-    const entry = schedule.prayers.find((x) => x.key === p.key);
-    if (!entry) continue;
-    const alertTime =
-      settings.prayerLeadMinutes > 0
-        ? addMinutesHHMM(entry.time, -settings.prayerLeadMinutes)
-        : entry.time;
-    rawItems.push({
-      id: `prayer-${p.key}`,
-      kind: 'prayer',
-      labelBn: `${p.labelBn} নামাজ`,
-      timeHHMM: alertTime,
-      time12Bn: formatTime12h(alertTime),
-      enabled: settings.notificationsEnabled && settings.prayerReminders[p.key],
-      leadNoteBn:
-        settings.prayerLeadMinutes > 0
-          ? `${settings.prayerLeadMinutes} মি. আগে`
-          : 'ঠিক ওয়াক্তে',
-      isNextUpcoming: false,
-      sortSecs: timeToSeconds(alertTime),
-    });
-  }
-
-  const routines: Array<{
-    key: keyof AppSettings['routineReminders'];
-    labelBn: string;
-  }> = [
-    { key: 'morningAzkar', labelBn: 'সকালের যিকির' },
-    { key: 'eveningAzkar', labelBn: 'সন্ধ্যার আমল ও ৩৩ আয়াত' },
-    { key: 'sleepSunnah', labelBn: 'রাতের আমল ও সূরা মুলক' },
-  ];
-
-  for (const r of routines) {
-    const cfg = settings.routineReminders[r.key];
-    rawItems.push({
-      id: `routine-${r.key}`,
-      kind: 'routine',
-      labelBn: r.labelBn,
-      timeHHMM: cfg.time,
-      time12Bn: formatTime12h(cfg.time),
-      enabled: settings.notificationsEnabled && cfg.enabled,
-      leadNoteBn: 'দৈনিক আমল',
-      isNextUpcoming: false,
-      sortSecs: timeToSeconds(cfg.time),
-    });
-  }
-
-  rawItems.sort((a, b) => a.sortSecs - b.sortSecs);
-
-  const enabledList = rawItems.filter((item) => item.enabled);
-  let nextItem = enabledList.find((item) => item.sortSecs > nowSecs) || enabledList[0] || null;
-  if (!nextItem) {
-    nextItem = rawItems.find((item) => item.sortSecs > nowSecs) || rawItems[0] || null;
-  }
-
-  const items: ReminderScheduleItem[] = rawItems.map(({ sortSecs: _unused, ...rest }) => ({
-    ...rest,
-    isNextUpcoming: nextItem ? rest.id === nextItem.id : false,
-  }));
-
-  return {
-    items,
-    nextUpcoming: nextItem
-      ? items.find((i) => i.id === nextItem.id) || null
-      : null,
   };
 }

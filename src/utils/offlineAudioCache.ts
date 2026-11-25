@@ -1,7 +1,44 @@
 export const OFFLINE_AUDIO_CACHE_NAME = 'quran-audio-cache';
 
+const resolvedObjectUrlMap = new Map<string, string>();
+const inFlightPrewarms = new Set<string>();
+const MAX_RESOLVED_BLOB_URLS = 40;
+
+function isValidAudioResponse(res: Response | undefined | null): res is Response {
+  if (!res || res.type === 'opaque' || !res.ok) return false;
+  const ctype = (res.headers.get('content-type') || '').toLowerCase();
+  if (!ctype) return true;
+  return (
+    ctype.includes('audio') ||
+    ctype.includes('mpeg') ||
+    ctype.includes('mp3') ||
+    ctype.includes('octet-stream')
+  );
+}
+
 export function isCacheStorageSupported(): boolean {
   return typeof window !== 'undefined' && 'caches' in window;
+}
+
+async function fetchCacheableAudioResponse(url: string): Promise<Response | null> {
+  try {
+    const corsRes = await fetch(url, { mode: 'cors' });
+    if (corsRes && corsRes.ok) {
+      return corsRes;
+    }
+  } catch {
+    // Fall back to opaque no-cors response only when host blocks CORS
+  }
+
+  try {
+    const opaqueRes = await fetch(url, { mode: 'no-cors' });
+    if (opaqueRes && (opaqueRes.ok || opaqueRes.type === 'opaque')) {
+      return opaqueRes;
+    }
+  } catch {
+    // network unavailable
+  }
+  return null;
 }
 
 export async function countCachedAudioUrls(urls: string[]): Promise<number> {
@@ -42,13 +79,16 @@ export async function downloadAudioUrlsForOffline(
       batch.map(async (url) => {
         try {
           const existing = await cache.match(url);
-          if (existing) {
+          if (existing && existing.type !== 'opaque') {
             saved += 1;
             return;
           }
-          const response = await fetch(url, { mode: 'no-cors' });
-          if (response && (response.ok || response.type === 'opaque')) {
+          const response = await fetchCacheableAudioResponse(url);
+          if (response) {
             await cache.put(url, response);
+            saved += 1;
+          } else if (existing) {
+            // Keep previously cached opaque entry if offline
             saved += 1;
           } else {
             failed += 1;
@@ -64,4 +104,104 @@ export async function downloadAudioUrlsForOffline(
   }
 
   return { saved, failed };
+}
+
+function rememberResolvedObjectUrl(remoteUrl: string, objectUrl: string): void {
+  if (resolvedObjectUrlMap.has(remoteUrl)) {
+    const existing = resolvedObjectUrlMap.get(remoteUrl);
+    resolvedObjectUrlMap.delete(remoteUrl);
+    resolvedObjectUrlMap.set(remoteUrl, existing || objectUrl);
+    return;
+  }
+  resolvedObjectUrlMap.set(remoteUrl, objectUrl);
+  while (resolvedObjectUrlMap.size > MAX_RESOLVED_BLOB_URLS) {
+    const oldestKey = resolvedObjectUrlMap.keys().next().value;
+    if (!oldestKey) break;
+    const oldestUrl = resolvedObjectUrlMap.get(oldestKey);
+    resolvedObjectUrlMap.delete(oldestKey);
+    if (oldestUrl) {
+      try {
+        URL.revokeObjectURL(oldestUrl);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+export function invalidateResolvedAudioUrl(remoteUrl: string): void {
+  const existing = resolvedObjectUrlMap.get(remoteUrl);
+  if (existing) {
+    resolvedObjectUrlMap.delete(remoteUrl);
+    try {
+      URL.revokeObjectURL(existing);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Synchronously returns an already-prepared in-memory blob: URL if available,
+ * otherwise falls back to the original URL so audio.play() can run synchronously
+ * inside native `ended` event handlers even while the screen is locked.
+ */
+export function getFastPlayableAudioUrlSync(remoteUrl: string): string {
+  const hit = resolvedObjectUrlMap.get(remoteUrl);
+  if (hit) {
+    // Refresh LRU order so actively playing/recent URLs are never evicted
+    resolvedObjectUrlMap.delete(remoteUrl);
+    resolvedObjectUrlMap.set(remoteUrl, hit);
+    return hit;
+  }
+  return remoteUrl;
+}
+
+/**
+ * Resolves cached audio from CacheStorage into a seekable in-memory blob: URL
+ * so offline & background screen-off playback works without Service Worker or Range hiccups.
+ */
+export async function resolveAndPrewarmAudioUrl(remoteUrl: string): Promise<string> {
+  if (!remoteUrl) return remoteUrl;
+  const cachedBlobUrl = resolvedObjectUrlMap.get(remoteUrl);
+  if (cachedBlobUrl) return cachedBlobUrl;
+  if (!isCacheStorageSupported()) return remoteUrl;
+  if (inFlightPrewarms.has(remoteUrl)) return remoteUrl;
+
+  inFlightPrewarms.add(remoteUrl);
+  try {
+    const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
+    let match = await cache.match(remoteUrl);
+
+    // Upgrade legacy opaque cache entry to CORS-readable response when online
+    if (match && match.type === 'opaque' && typeof navigator !== 'undefined' && navigator.onLine) {
+      const upgraded = await fetch(remoteUrl, { mode: 'cors' }).catch(() => null);
+      if (upgraded && upgraded.ok) {
+        await cache.put(remoteUrl, upgraded.clone());
+        match = upgraded;
+      }
+    }
+
+    if (isValidAudioResponse(match)) {
+      const blob = await match.blob();
+      if (blob.size > 0) {
+        const objUrl = URL.createObjectURL(blob);
+        rememberResolvedObjectUrl(remoteUrl, objUrl);
+        return objUrl;
+      }
+    }
+  } catch {
+    // fallback to remoteUrl
+  } finally {
+    inFlightPrewarms.delete(remoteUrl);
+  }
+
+  return remoteUrl;
+}
+
+export function prewarmUpcomingAudioUrls(urls: string[]): void {
+  for (const url of urls) {
+    if (!url || resolvedObjectUrlMap.has(url) || inFlightPrewarms.has(url)) continue;
+    void resolveAndPrewarmAudioUrl(url);
+  }
 }

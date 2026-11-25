@@ -45,6 +45,7 @@ import type {
 import {
   countCachedAudioUrls,
   downloadAudioUrlsForOffline,
+  prewarmUpcomingAudioUrls,
 } from '../utils/offlineAudioCache';
 import { TAJWEED_COLOR_CLASSES, TAJWEED_LEGEND } from '../utils/quranFormatting';
 import { speechPlayer, useSpeechPlayer } from '../utils/speechPlayer';
@@ -492,7 +493,12 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
     }
     let active = true;
     countCachedAudioUrls(tracksToCheck.map((t) => t.audioUrl)).then((cnt) => {
-      if (active) setReaderOfflineCount(cnt);
+      if (active) {
+        setReaderOfflineCount(cnt);
+        if (cnt > 0) {
+          prewarmUpcomingAudioUrls(tracksToCheck.slice(0, 3).map((t) => t.audioUrl));
+        }
+      }
     });
     return () => {
       active = false;
