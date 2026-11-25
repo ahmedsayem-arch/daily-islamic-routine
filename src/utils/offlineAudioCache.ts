@@ -2,7 +2,7 @@ export const OFFLINE_AUDIO_CACHE_NAME = 'quran-audio-cache';
 
 const resolvedObjectUrlMap = new Map<string, string>();
 const inFlightPrewarms = new Set<string>();
-const MAX_RESOLVED_BLOB_URLS = 40;
+const MAX_RESOLVED_BLOB_URLS = 64;
 
 function isValidAudioResponse(res: Response | undefined | null): res is Response {
   if (!res || res.type === 'opaque' || !res.ok) return false;
@@ -203,5 +203,51 @@ export function prewarmUpcomingAudioUrls(urls: string[]): void {
   for (const url of urls) {
     if (!url || resolvedObjectUrlMap.has(url) || inFlightPrewarms.has(url)) continue;
     void resolveAndPrewarmAudioUrl(url);
+  }
+}
+
+/**
+ * Background-fetches upcoming small Ayah MP3s into CacheStorage + in-memory blob: URLs
+ * while online so transitions remain gapless even after the screen turns off.
+ */
+export function prefetchAndCacheAudioUrls(urls: string[]): void {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    prewarmUpcomingAudioUrls(urls);
+    return;
+  }
+
+  for (const url of urls) {
+    if (!url || resolvedObjectUrlMap.has(url) || inFlightPrewarms.has(url)) continue;
+    // Skip very large full-surah archive.org files during automatic background prefetch
+    if (url.includes('archive.org/')) {
+      void resolveAndPrewarmAudioUrl(url);
+      continue;
+    }
+    inFlightPrewarms.add(url);
+    void (async () => {
+      try {
+        if (!isCacheStorageSupported()) return;
+        const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
+        let match = await cache.match(url);
+        if (!match || match.type === 'opaque') {
+          const corsRes = await fetch(url, { mode: 'cors' }).catch(() => null);
+          if (corsRes && corsRes.ok) {
+            await cache.put(url, corsRes.clone());
+            match = corsRes;
+          }
+        }
+        if (isValidAudioResponse(match)) {
+          const blob = await match.blob();
+          if (blob.size > 0) {
+            const objUrl = URL.createObjectURL(blob);
+            rememberResolvedObjectUrl(url, objUrl);
+          }
+        }
+      } catch {
+        // Silent prefetch failure is harmless
+      } finally {
+        inFlightPrewarms.delete(url);
+      }
+    })();
   }
 }

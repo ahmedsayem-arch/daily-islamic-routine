@@ -24,13 +24,19 @@ export function setMediaSessionMetadata(input: MediaSessionMetaInput): void {
   const ms = getMediaSession();
   if (!ms || typeof MediaMetadata === 'undefined') return;
   try {
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : '';
+    const icon192 = origin ? `${origin}/pwa-192x192.png` : '/pwa-192x192.png';
+    const icon512 = origin ? `${origin}/pwa-512x512.png` : '/pwa-512x512.png';
     ms.metadata = new MediaMetadata({
       title: input.title,
       artist: input.artist || 'Daily Islamic Routine',
       album: input.album || 'তিলাওয়াত ও ইবাদত',
       artwork: [
-        { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-        { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+        { src: icon192, sizes: '192x192', type: 'image/png' },
+        { src: icon512, sizes: '512x512', type: 'image/png' },
       ],
     });
   } catch {
