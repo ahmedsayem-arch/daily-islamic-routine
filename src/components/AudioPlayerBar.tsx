@@ -616,11 +616,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         </div>
 
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-1.5">
-          <button
-            type="button"
-            onClick={() => onSetVisualOpen(true)}
-            className="flex min-w-0 flex-1 items-center gap-3 text-left"
-          >
+          <div className="flex min-w-0 flex-1 items-center gap-3 text-left">
             <div
               className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tokens.miniIconBox}`}
             >
@@ -641,7 +637,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                 </span>
               </p>
             </div>
-          </button>
+          </div>
 
           <div className="flex shrink-0 items-center gap-1">
             <button

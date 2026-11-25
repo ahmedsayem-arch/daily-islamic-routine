@@ -8,6 +8,7 @@ import {
   Clock,
   Headphones,
   Languages,
+  LayoutGrid,
   MapPin,
   Mic,
   Palette,
@@ -59,6 +60,7 @@ interface SettingsViewProps {
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
   onToggleMasterNotification: () => void;
   onResetDefaults: () => void;
+  onOpenWidgets?: () => void;
 }
 
 type PickerModalType =
@@ -146,6 +148,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdateSettings,
   onToggleMasterNotification,
   onResetDefaults,
+  onOpenWidgets,
 }) => {
   const [activeModal, setActiveModal] = useState<PickerModalType>(null);
   const [resetDone, setResetDone] = useState(false);
@@ -617,6 +620,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
               <ChevronRight className="h-4 w-4 shrink-0 text-[#475A53] dark:text-[#9BB0A8]" />
             </button>
+
+            {onOpenWidgets && (
+              <button
+                type="button"
+                onClick={onOpenWidgets}
+                className={`${rowButtonClass} md:col-span-2`}
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <LayoutGrid className="h-4 w-4 shrink-0 text-[#0D6E52] dark:text-[#E7C57B]" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[#0F1F1A] dark:text-[#F0F5F3]">
+                      নামাজ, তারিখ ও রিমাইন্ডার উইজেট
+                    </p>
+                    <p className="truncate text-xs text-[#475A53] dark:text-[#9BB0A8]">
+                      লাইভ মিনি উইজেট, নোটিফিকেশন বার উইজেট ও লক-স্ক্রিন ছবি ডাউনলোড
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-[#475A53] dark:text-[#9BB0A8]" />
+              </button>
+            )}
           </div>
         </section>
 

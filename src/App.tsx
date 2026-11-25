@@ -20,6 +20,10 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { DailyRoutineView } from './components/DailyRoutineView';
 import { HadithView } from './components/HadithView';
 import { OfflineIndicator } from './components/PWAInstallButton';
+import {
+  PrayerWidgetsModal,
+  StandaloneWidgetView,
+} from './components/PrayerWidgetsModal';
 import { QuranView } from './components/QuranView';
 import { RuqyahAmolView } from './components/RuqyahAmolView';
 import { SeerahView } from './components/SeerahView';
@@ -117,7 +121,32 @@ function mergeSavedSettings(rawObj: Partial<AppSettings> | null | undefined): Ap
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('routine');
+  const [isWidgetMode, setIsWidgetMode] = useState<boolean>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('widget') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    try {
+      const tabParam = new URLSearchParams(window.location.search).get('tab');
+      if (
+        tabParam === 'routine' ||
+        tabParam === 'quran' ||
+        tabParam === 'hadith' ||
+        tabParam === 'seerah' ||
+        tabParam === 'ruqyah' ||
+        tabParam === 'settings'
+      ) {
+        return tabParam;
+      }
+    } catch {
+      // ignore
+    }
+    return 'routine';
+  });
+  const [isWidgetsOpen, setIsWidgetsOpen] = useState(false);
   const [ruqyahRouteIntent, setRuqyahRouteIntent] = useState<{
     subTab: 'ruqyah' | 'manzil' | 'azkar';
     azkarFilter: 'all' | 'morning' | 'evening';
@@ -736,6 +765,65 @@ export default function App() {
     }
   }, [activeTab]);
 
+  if (isWidgetMode) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <StandaloneWidgetView
+          schedule={schedule}
+          settings={appSettings}
+          selectedCityId={selectedCityId}
+          onChangeCityId={handleChangeCityId}
+          onToggleNotifications={handleToggleMasterNotification}
+          onExitWidgetMode={() => {
+            setIsWidgetMode(false);
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('widget');
+              window.history.replaceState({}, '', url.pathname + url.search);
+            } catch {
+              // ignore
+            }
+          }}
+          onInAppAlert={handleInAppAlert}
+        />
+        <AnimatePresence>
+          {inAppAlert && (
+            <motion.div
+              key={inAppAlert.id}
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              role="status"
+              aria-live="polite"
+              className="fixed left-4 right-4 top-6 z-50 mx-auto max-w-md rounded-2xl border border-[#E7C57B]/50 bg-[#063D34]/95 p-4 text-white shadow-2xl backdrop-blur-xl"
+            >
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D4A853]/20 text-[#F6DC9B]">
+                  <Bell className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-[#F6DC9B]">{inAppAlert.title}</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-[#E2EFEA]">
+                    {inAppAlert.body}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInAppAlert(null)}
+                  className="flex min-h-[36px] min-w-[36px] shrink-0 items-center justify-center rounded-lg text-[#CBE2DA] hover:bg-white/10 hover:text-white"
+                  aria-label="নোটিফিকেশন বন্ধ করুন"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </MotionConfig>
+    );
+  }
+
   return (
     <MotionConfig reducedMotion="user">
     <div className="bg-sanctuary-canvas min-h-screen text-[#0F1F1A] transition-colors dark:text-[#F0F5F3]">
@@ -836,6 +924,7 @@ export default function App() {
                   }
                 }}
                 onOpenTasbih={() => setIsTasbihOpen(true)}
+                onOpenWidgets={() => setIsWidgetsOpen(true)}
               />
             )}
 
@@ -884,7 +973,6 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onPlayPlaylist={handlePlayPlaylist}
                 onTogglePlay={handleTogglePlay}
-                onOpenVisualPlayer={() => setIsVisualOpen(true)}
               />
             )}
 
@@ -904,6 +992,7 @@ export default function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onToggleMasterNotification={handleToggleMasterNotification}
                 onResetDefaults={handleResetSettings}
+                onOpenWidgets={() => setIsWidgetsOpen(true)}
               />
             )}
           </motion.div>
@@ -1038,6 +1127,27 @@ export default function App() {
         isOpen={isTasbihOpen}
         onClose={() => setIsTasbihOpen(false)}
         apiHijriParts={schedule.hijriParts}
+      />
+
+      {/* Prayer Times, Dates & Reminder Widgets Studio */}
+      <PrayerWidgetsModal
+        isOpen={isWidgetsOpen}
+        onClose={() => setIsWidgetsOpen(false)}
+        schedule={schedule}
+        settings={appSettings}
+        onToggleNotifications={handleToggleMasterNotification}
+        onOpenStandaloneWidget={() => {
+          setIsWidgetsOpen(false);
+          setIsWidgetMode(true);
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('widget', '1');
+            window.history.replaceState({}, '', url.pathname + url.search);
+          } catch {
+            // ignore
+          }
+        }}
+        onInAppAlert={handleInAppAlert}
       />
 
       {/* Floating Speech Narration Mini Dock (Hadith, Seerah, Azkar) */}

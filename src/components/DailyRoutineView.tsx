@@ -8,6 +8,7 @@ import {
   Check,
   Clock,
   Compass,
+  LayoutGrid,
   MapPin,
   Minus,
   Moon,
@@ -25,11 +26,7 @@ import {
   HERO_MEDINA_IMG,
 } from '../data/islamicData';
 import { RIYAD_CURATED_HADITHS } from '../data/seerahAndRiyadData';
-import {
-  computeLastThirdStart,
-  computeSehriEndFromFajr,
-  type PrayerScheduleResult,
-} from '../services/islamicApi';
+import type { PrayerScheduleResult } from '../services/islamicApi';
 import type {
   ActiveTab,
   AppThemeId,
@@ -38,6 +35,7 @@ import type {
   RoutineWaqt,
 } from '../types/islamic';
 import { APP_THEMES } from '../utils/playerThemes';
+import { getActiveWaqtStatus } from '../utils/prayerScheduleHelper';
 import {
   formatClock12h,
   formatTime12h,
@@ -61,6 +59,7 @@ interface DailyRoutineViewProps {
     azkarFilter?: 'all' | 'morning' | 'evening'
   ) => void;
   onOpenTasbih: () => void;
+  onOpenWidgets?: () => void;
 }
 
 const WAQT_FILTERS: Array<{ id: 'all' | RoutineWaqt; label: string }> = [
@@ -101,258 +100,6 @@ function getDateKey(date: Date): string {
   ).padStart(2, '0')}`;
 }
 
-function timeToSeconds(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map(Number);
-  return (h || 0) * 3600 + (m || 0) * 60;
-}
-
-function secondsToHMS(diffSecs: number): string {
-  const clamped = Math.max(0, Math.floor(diffSecs));
-  const h = Math.floor(clamped / 3600);
-  const m = Math.floor((clamped % 3600) / 60);
-  const s = clamped % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function addMinutesHHMM(hhmm: string, deltaMins: number): string {
-  const [h, m] = hhmm.split(':').map(Number);
-  const total = (((h || 0) * 60 + (m || 0) + deltaMins) % 1440 + 1440) % 1440;
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
-}
-
-interface WaqtSlotItem {
-  id: string;
-  labelBn: string;
-  rangeTextBn: string;
-  subNoteBn?: string;
-  isActive: boolean;
-}
-
-interface ActiveWaqtStatus {
-  activeTitleBn: string;
-  activeRangeBn: string;
-  remainingLabelBn: string;
-  remainingCountdown: string;
-  progressPct: number;
-  nextTitleBn: string;
-  nextRangeBn: string;
-  nextStartsIn: string;
-  tahajjudStart: string;
-  sehriEnd: string;
-  sunrise: string;
-  iftarTime: string;
-  slots: WaqtSlotItem[];
-}
-
-function getActiveWaqtStatus(
-  schedule: PrayerScheduleResult,
-  now: Date
-): ActiveWaqtStatus {
-  const getT = (key: PrayerScheduleResult['prayers'][number]['key'], fallback: string) =>
-    schedule.prayers.find((p) => p.key === key)?.time || fallback;
-
-  const fajr = getT('Fajr', '05:02');
-  const sunrise = getT('Sunrise', '06:18');
-  const dhuhr = getT('Dhuhr', '11:52');
-  const asr = getT('Asr', '15:36');
-  const maghrib = getT('Maghrib', '17:24');
-  const isha = getT('Isha', '18:42');
-
-  const sehriEnd = schedule.imsakTime || computeSehriEndFromFajr(fajr);
-  const tahajjudStart = schedule.tahajjudStart || computeLastThirdStart(maghrib, fajr);
-  const duhaStart = addMinutesHHMM(sunrise, 15);
-  const duhaEnd = addMinutesHHMM(dhuhr, -5);
-
-  const nowSecs = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  const sTahajjud = timeToSeconds(tahajjudStart);
-  const sSehriEnd = timeToSeconds(sehriEnd);
-  const sFajr = timeToSeconds(fajr);
-  const sSunrise = timeToSeconds(sunrise);
-  const sDhuhr = timeToSeconds(dhuhr);
-  const sAsr = timeToSeconds(asr);
-  const sMaghrib = timeToSeconds(maghrib);
-  const sIsha = timeToSeconds(isha);
-
-  const daySecs = 24 * 3600;
-  const spanBetween = (startS: number, endS: number, curS: number) => {
-    const total = endS >= startS ? endS - startS : daySecs - startS + endS;
-    const elapsed = curS >= startS ? curS - startS : daySecs - startS + curS;
-    const rem = Math.max(0, total - elapsed);
-    const pct = total > 0 ? Math.max(4, Math.min(98, Math.round((elapsed / total) * 100))) : 50;
-    return { rem, pct };
-  };
-
-  let activeId = 'isha';
-  let activeTitleBn = 'এশার ওয়াক্ত চলছে';
-  let activeRangeBn = `${formatTime12h(isha)} হতে ${formatTime12h(fajr)}`;
-  let remainingLabelBn = 'শেষ রাত / ফজরের আগে বাকি';
-  let remainingCountdown = '00:00:00';
-  let progressPct = 50;
-  let nextTitleBn = 'তাহাজ্জুদ';
-  let nextRangeBn = `${formatTime12h(tahajjudStart)} হতে ${formatTime12h(fajr)}`;
-  let nextStartsIn = '00:00:00';
-
-  if (nowSecs >= sFajr && nowSecs < sSunrise) {
-    activeId = 'fajr';
-    const { rem, pct } = spanBetween(sFajr, sSunrise, nowSecs);
-    activeTitleBn = 'ফজরের ওয়াক্ত চলছে';
-    activeRangeBn = `${formatTime12h(fajr)} হতে ${formatTime12h(sunrise)}`;
-    remainingLabelBn = 'ওয়াক্ত শেষ হতে বাকি (সূর্যোদয়)';
-    remainingCountdown = secondsToHMS(rem);
-    progressPct = pct;
-    nextTitleBn = 'যোহর';
-    nextRangeBn = `${formatTime12h(dhuhr)} হতে ${formatTime12h(asr)}`;
-    nextStartsIn = secondsToHMS(sDhuhr - nowSecs);
-  } else if (nowSecs >= sSunrise && nowSecs < sDhuhr) {
-    activeId = 'duha';
-    const { rem, pct } = spanBetween(sSunrise, sDhuhr, nowSecs);
-    activeTitleBn = 'ইশরাক ও চাশতের সময়';
-    activeRangeBn = `${formatTime12h(duhaStart)} হতে ${formatTime12h(duhaEnd)}`;
-    remainingLabelBn = 'যোহর শুরু হতে বাকি';
-    remainingCountdown = secondsToHMS(rem);
-    progressPct = pct;
-    nextTitleBn = 'যোহর';
-    nextRangeBn = `${formatTime12h(dhuhr)} হতে ${formatTime12h(asr)}`;
-    nextStartsIn = secondsToHMS(sDhuhr - nowSecs);
-  } else if (nowSecs >= sDhuhr && nowSecs < sAsr) {
-    activeId = 'dhuhr';
-    const { rem, pct } = spanBetween(sDhuhr, sAsr, nowSecs);
-    activeTitleBn = 'যোহরের ওয়াক্ত চলছে';
-    activeRangeBn = `${formatTime12h(dhuhr)} হতে ${formatTime12h(asr)}`;
-    remainingLabelBn = 'ওয়াক্ত শেষ হতে বাকি';
-    remainingCountdown = secondsToHMS(rem);
-    progressPct = pct;
-    nextTitleBn = 'আসর';
-    nextRangeBn = `${formatTime12h(asr)} হতে ${formatTime12h(maghrib)}`;
-    nextStartsIn = secondsToHMS(rem);
-  } else if (nowSecs >= sAsr && nowSecs < sMaghrib) {
-    activeId = 'asr';
-    const { rem, pct } = spanBetween(sAsr, sMaghrib, nowSecs);
-    activeTitleBn = 'আসরের ওয়াক্ত চলছে';
-    activeRangeBn = `${formatTime12h(asr)} হতে ${formatTime12h(maghrib)}`;
-    remainingLabelBn = 'ইফতার ও মাগরিবের বাকি';
-    remainingCountdown = secondsToHMS(rem);
-    progressPct = pct;
-    nextTitleBn = 'মাগরিব ও ইফতার';
-    nextRangeBn = `${formatTime12h(maghrib)} হতে ${formatTime12h(isha)}`;
-    nextStartsIn = secondsToHMS(rem);
-  } else if (nowSecs >= sMaghrib && nowSecs < sIsha) {
-    activeId = 'maghrib';
-    const { rem, pct } = spanBetween(sMaghrib, sIsha, nowSecs);
-    activeTitleBn = 'মাগরিব ও ইফতারের সময় চলছে';
-    activeRangeBn = `${formatTime12h(maghrib)} হতে ${formatTime12h(isha)}`;
-    remainingLabelBn = 'ওয়াক্ত শেষ হতে বাকি';
-    remainingCountdown = secondsToHMS(rem);
-    progressPct = pct;
-    nextTitleBn = 'এশা';
-    nextRangeBn = `${formatTime12h(isha)} হতে ${formatTime12h(fajr)}`;
-    nextStartsIn = secondsToHMS(rem);
-  } else if (
-    (sTahajjud < sFajr && nowSecs >= sTahajjud && nowSecs < sFajr) ||
-    (sTahajjud > sIsha && (nowSecs >= sTahajjud || nowSecs < sFajr))
-  ) {
-    activeId = 'tahajjud';
-    const { rem, pct } = spanBetween(sTahajjud, sFajr, nowSecs);
-    const toSehri = nowSecs <= sSehriEnd ? sSehriEnd - nowSecs : daySecs - nowSecs + sSehriEnd;
-    activeTitleBn = 'তাহাজ্জুদ ও সেহরির সময় চলছে';
-    activeRangeBn = `${formatTime12h(tahajjudStart)} হতে ${formatTime12h(fajr)}`;
-    remainingLabelBn =
-      nowSecs < sSehriEnd
-        ? `সেহরির শেষ (${formatTime12h(sehriEnd)}) পর্যন্ত বাকি`
-        : 'ফজর শুরু হতে বাকি';
-    remainingCountdown = nowSecs < sSehriEnd ? secondsToHMS(toSehri) : secondsToHMS(rem);
-    progressPct = pct;
-    nextTitleBn = 'ফজর';
-    nextRangeBn = `${formatTime12h(fajr)} হতে ${formatTime12h(sunrise)}`;
-    nextStartsIn = secondsToHMS(rem);
-  } else {
-    activeId = 'isha';
-    const { rem, pct } = spanBetween(sIsha, sFajr, nowSecs);
-    const toTahajjud =
-      sTahajjud >= nowSecs ? sTahajjud - nowSecs : daySecs - nowSecs + sTahajjud;
-    activeTitleBn = 'এশার ওয়াক্ত চলছে';
-    activeRangeBn = `${formatTime12h(isha)} হতে ${formatTime12h(fajr)}`;
-    remainingLabelBn = 'তাহাজ্জুদ শুরু হতে বাকি';
-    remainingCountdown = secondsToHMS(toTahajjud);
-    progressPct = pct;
-    nextTitleBn = 'তাহাজ্জুদ';
-    nextRangeBn = `${formatTime12h(tahajjudStart)} হতে ${formatTime12h(fajr)}`;
-    nextStartsIn = secondsToHMS(rem > 0 ? toTahajjud : 0);
-  }
-
-  const slots: WaqtSlotItem[] = [
-    {
-      id: 'tahajjud',
-      labelBn: 'তাহাজ্জুদ',
-      rangeTextBn: `${formatTime12h(tahajjudStart)} হতে ${formatTime12h(fajr)}`,
-      subNoteBn: 'শেষ তৃতীয়াংশ',
-      isActive: activeId === 'tahajjud',
-    },
-    {
-      id: 'sehri',
-      labelBn: 'সেহরির শেষ সময়',
-      rangeTextBn: `${formatTime12h(sehriEnd)} পর্যন্ত`,
-      subNoteBn: `ফজর শুরু ${formatTime12h(fajr)}`,
-      isActive: activeId === 'tahajjud' && nowSecs < sSehriEnd,
-    },
-    {
-      id: 'fajr',
-      labelBn: 'ফজর',
-      rangeTextBn: `${formatTime12h(fajr)} হতে ${formatTime12h(sunrise)}`,
-      subNoteBn: `সূর্যোদয় ${formatTime12h(sunrise)}`,
-      isActive: activeId === 'fajr',
-    },
-    {
-      id: 'dhuhr',
-      labelBn: 'যোহর',
-      rangeTextBn: `${formatTime12h(dhuhr)} হতে ${formatTime12h(asr)}`,
-      isActive: activeId === 'dhuhr',
-    },
-    {
-      id: 'asr',
-      labelBn: 'আসর',
-      rangeTextBn: `${formatTime12h(asr)} হতে ${formatTime12h(maghrib)}`,
-      isActive: activeId === 'asr',
-    },
-    {
-      id: 'iftar',
-      labelBn: 'ইফতারের সময়',
-      rangeTextBn: `${formatTime12h(maghrib)} হতে ${formatTime12h(isha)}`,
-      subNoteBn: `ইফতার শুরু ${formatTime12h(maghrib)}`,
-      isActive: activeId === 'maghrib',
-    },
-    {
-      id: 'maghrib',
-      labelBn: 'মাগরিব',
-      rangeTextBn: `${formatTime12h(maghrib)} হতে ${formatTime12h(isha)}`,
-      isActive: activeId === 'maghrib',
-    },
-    {
-      id: 'isha',
-      labelBn: 'ইশা',
-      rangeTextBn: `${formatTime12h(isha)} হতে ${formatTime12h(fajr)}`,
-      subNoteBn: `তাহাজ্জুদ শুরু ${formatTime12h(tahajjudStart)}`,
-      isActive: activeId === 'isha',
-    },
-  ];
-
-  return {
-    activeTitleBn,
-    activeRangeBn,
-    remainingLabelBn,
-    remainingCountdown,
-    progressPct,
-    nextTitleBn,
-    nextRangeBn,
-    nextStartsIn,
-    tahajjudStart,
-    sehriEnd,
-    sunrise,
-    iftarTime: maghrib,
-    slots,
-  };
-}
-
 export const DailyRoutineView: React.FC<DailyRoutineViewProps> = ({
   isDark,
   appTheme,
@@ -366,6 +113,7 @@ export const DailyRoutineView: React.FC<DailyRoutineViewProps> = ({
   onNavigateTab,
   onOpenAmol,
   onOpenTasbih,
+  onOpenWidgets,
 }) => {
   const [now, setNow] = useState<Date>(() => new Date());
   const [heroImgError, setHeroImgError] = useState(false);
@@ -567,15 +315,28 @@ export const DailyRoutineView: React.FC<DailyRoutineViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 sm:justify-end">
-          <button
-            type="button"
-            onClick={() => setIsCalendarOpen(true)}
-            className="flex min-h-[36px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#0D6E52]/25 bg-white px-3 text-xs font-bold text-[#063D34] shadow-sm transition-colors hover:border-[#0D6E52]/50 hover:bg-[#0D6E52]/5 dark:border-[#E7C57B]/30 dark:bg-white/10 dark:text-[#F6DC9B] dark:hover:bg-white/15"
-          >
-            <Calendar className="h-3.5 w-3.5 text-[#0D6E52] dark:text-[#6EE7B7]" />
-            <span>সব ক্যালেন্ডার</span>
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
+            {onOpenWidgets && (
+              <button
+                type="button"
+                onClick={onOpenWidgets}
+                className="flex min-h-[36px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#D4A853]/35 bg-[#D4A853]/12 px-3 text-xs font-bold text-[#745118] shadow-sm transition-colors hover:bg-[#D4A853]/20 dark:border-[#E7C57B]/35 dark:bg-[#E7C57B]/15 dark:text-[#F6DC9B] dark:hover:bg-[#E7C57B]/25"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                <span>উইজেট</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setIsCalendarOpen(true)}
+              className="flex min-h-[36px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#0D6E52]/25 bg-white px-3 text-xs font-bold text-[#063D34] shadow-sm transition-colors hover:border-[#0D6E52]/50 hover:bg-[#0D6E52]/5 dark:border-[#E7C57B]/30 dark:bg-white/10 dark:text-[#F6DC9B] dark:hover:bg-white/15"
+            >
+              <Calendar className="h-3.5 w-3.5 text-[#0D6E52] dark:text-[#6EE7B7]" />
+              <span>সব ক্যালেন্ডার</span>
+            </button>
+          </div>
 
           <p
             dir="rtl"

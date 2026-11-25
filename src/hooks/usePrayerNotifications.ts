@@ -54,9 +54,13 @@ function getLocalDateKey(d: Date): string {
   ).padStart(2, '0')}`;
 }
 
-async function dispatchSystemNotification(title: string, body: string, tag: string): Promise<void> {
-  if (typeof window === 'undefined' || !('Notification' in window)) return;
-  if (Notification.permission !== 'granted') return;
+export async function dispatchSystemNotification(
+  title: string,
+  body: string,
+  tag: string
+): Promise<boolean> {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false;
+  if (Notification.permission !== 'granted') return false;
 
   try {
     if ('serviceWorker' in navigator) {
@@ -68,7 +72,7 @@ async function dispatchSystemNotification(title: string, body: string, tag: stri
           badge: '/pwa-192x192.png',
           tag,
         });
-        return;
+        return true;
       }
     }
     new Notification(title, {
@@ -76,8 +80,9 @@ async function dispatchSystemNotification(title: string, body: string, tag: stri
       icon: '/pwa-192x192.png',
       tag,
     });
+    return true;
   } catch {
-    // ignore iframe or permission quirks
+    return false;
   }
 }
 

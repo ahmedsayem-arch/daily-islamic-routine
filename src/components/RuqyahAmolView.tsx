@@ -68,7 +68,6 @@ interface RuqyahAmolViewProps {
   onUpdateSettings?: (patch: Partial<AppSettings>) => void;
   onPlayPlaylist: (tracks: AudioTrackItem[], startIndex: number, openVisual?: boolean) => void;
   onTogglePlay: () => void;
-  onOpenVisualPlayer: () => void;
 }
 
 type SubTab = 'ruqyah' | 'manzil' | 'azkar';
@@ -196,7 +195,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   onUpdateSettings,
   onPlayPlaylist,
   onTogglePlay,
-  onOpenVisualPlayer,
 }) => {
   const [subTab, setSubTab] = useState<SubTab>(routeIntent?.subTab || 'ruqyah');
   const [ruqyahCat, setRuqyahCat] = useState<RuqyahCat>('all');
@@ -204,6 +202,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
 
   // Quran-style Reader state for Ruqyah Compilations
   const [selectedRuqyahId, setSelectedRuqyahId] = useState<string | null>(null);
+  const [activePlayingRuqyahId, setActivePlayingRuqyahId] = useState<string | null>(null);
   const [ruqyahTracks, setRuqyahTracks] = useState<AudioTrackItem[]>([]);
   const [ruqyahLoading, setRuqyahLoading] = useState(false);
   const [ruqyahReaderStyle, setRuqyahReaderStyle] = useState<'translation' | 'arabicOnly'>(
@@ -232,6 +231,8 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   const [amolImgFailed, setAmolImgFailed] = useState(false);
   const [autoFollowAyah, setAutoFollowAyah] = useState(true);
   const ayahElementRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const pendingRuqyahPlayIdRef = useRef<string | null>(null);
+  const pendingManzilPlayRef = useRef<boolean>(false);
 
   const [offlineSaving, setOfflineSaving] = useState<{
     id: string;
@@ -337,18 +338,28 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
       activeRuqyahProgram.titleBn
     )
       .then((tracks) => {
-        if (active) {
-          setRuqyahTracks(tracks);
-          setRuqyahLoading(false);
+        if (!active) return;
+        setRuqyahTracks(tracks);
+        setRuqyahLoading(false);
+        if (
+          pendingRuqyahPlayIdRef.current === activeRuqyahProgram.id &&
+          tracks.length > 0
+        ) {
+          pendingRuqyahPlayIdRef.current = null;
+          setActivePlayingRuqyahId(activeRuqyahProgram.id);
+          onPlayPlaylist(tracks, 0, false);
         }
       })
       .catch(() => {
-        if (active) setRuqyahLoading(false);
+        if (active) {
+          pendingRuqyahPlayIdRef.current = null;
+          setRuqyahLoading(false);
+        }
       });
     return () => {
       active = false;
     };
-  }, [activeRuqyahProgram, selectedQari]);
+  }, [activeRuqyahProgram, selectedQari, onPlayPlaylist]);
 
   const groupedManzil = useMemo(
     () =>
@@ -388,18 +399,31 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
         : groupedManzil[manzilGroupFilter]?.nameBn || '৩৩ আয়াত (মঞ্জিল)';
     buildPlaylistFromRefs(activeManzilRefs, selectedQari, titleLabel)
       .then((tracks) => {
-        if (active) {
-          setManzilTracks(tracks);
-          setManzilLoading(false);
+        if (!active) return;
+        setManzilTracks(tracks);
+        setManzilLoading(false);
+        if (pendingManzilPlayRef.current && tracks.length > 0) {
+          pendingManzilPlayRef.current = false;
+          onPlayPlaylist(tracks, 0, false);
         }
       })
       .catch(() => {
-        if (active) setManzilLoading(false);
+        if (active) {
+          pendingManzilPlayRef.current = false;
+          setManzilLoading(false);
+        }
       });
     return () => {
       active = false;
     };
-  }, [manzilReaderOpen, manzilGroupFilter, activeManzilRefs, groupedManzil, selectedQari]);
+  }, [
+    manzilReaderOpen,
+    manzilGroupFilter,
+    activeManzilRefs,
+    groupedManzil,
+    selectedQari,
+    onPlayPlaylist,
+  ]);
 
   // Count cached offline audio tracks for the open Quran-style reader
   useEffect(() => {
@@ -445,24 +469,43 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
     scrollTopSmooth();
   };
 
+  const handleOpenAndPlayRuqyah = (program: RuqyahProgram) => {
+    if (
+      activeRuqyahProgram?.id === program.id &&
+      ruqyahTracks.length > 0 &&
+      !ruqyahLoading
+    ) {
+      setActivePlayingRuqyahId(program.id);
+      onPlayPlaylist(ruqyahTracks, 0, false);
+      scrollTopSmooth();
+      return;
+    }
+    pendingRuqyahPlayIdRef.current = program.id;
+    setSelectedRuqyahId(program.id);
+    scrollTopSmooth();
+  };
+
   const handleOpenManzilReader = (groupIndex: number | 'all' = 'all') => {
     setManzilGroupFilter(groupIndex);
     setManzilReaderOpen(true);
     scrollTopSmooth();
   };
 
-  const handlePlayProgram = async (program: RuqyahProgram, openVisual: boolean) => {
-    setLoadingId(`${program.id}-${openVisual ? 'v' : 'a'}`);
-    try {
-      const tracks = await buildPlaylistFromRefs(
-        program.verses,
-        selectedQari,
-        program.titleBn
-      );
-      onPlayPlaylist(tracks, 0, openVisual);
-    } finally {
-      setLoadingId(null);
+  const handleOpenAndPlayManzil = (groupIndex: number | 'all' = 'all') => {
+    if (
+      manzilReaderOpen &&
+      manzilGroupFilter === groupIndex &&
+      manzilTracks.length > 0 &&
+      !manzilLoading
+    ) {
+      onPlayPlaylist(manzilTracks, 0, false);
+      scrollTopSmooth();
+      return;
     }
+    pendingManzilPlayRef.current = true;
+    setManzilGroupFilter(groupIndex);
+    setManzilReaderOpen(true);
+    scrollTopSmooth();
   };
 
   const handlePlayRefs = async (
@@ -583,7 +626,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
           ayah: r.ayah,
           surahNameBn: azkar.titleBn,
         })),
-        true
+        false
       );
       return;
     }
@@ -672,7 +715,13 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
               <div className="mt-5 flex flex-wrap items-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => tracks.length > 0 && onPlayPlaylist(tracks, 0, false)}
+                  onClick={() => {
+                    if (tracks.length === 0) return;
+                    if (subTab === 'ruqyah' && activeRuqyahProgram) {
+                      setActivePlayingRuqyahId(activeRuqyahProgram.id);
+                    }
+                    onPlayPlaylist(tracks, 0, false);
+                  }}
                   disabled={loading || tracks.length === 0}
                   className="flex min-h-[44px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#D4A853] to-[#C2923B] px-4 py-2 text-xs font-bold text-[#041D18] shadow-md transition-transform hover:-translate-y-0.5 disabled:opacity-50"
                 >
@@ -1289,14 +1338,14 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                       </div>
                     </div>
 
-                    {audioStatus !== 'idle' && (
+                    {audioStatus !== 'idle' && activePlayingRuqyahId && (
                       <button
                         type="button"
-                        onClick={onOpenVisualPlayer}
+                        onClick={() => handleOpenRuqyahReader(activePlayingRuqyahId)}
                         className="flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-[#E7C57B]/40 bg-[#E7C57B]/15 px-3 text-xs font-semibold text-[#F6DC9B] transition-colors hover:bg-[#E7C57B]/25"
                       >
-                        <Maximize2 className="h-3.5 w-3.5" />
-                        <span className="whitespace-nowrap">ভিজ্যুয়াল মোড</span>
+                        <BookOpen className="h-3.5 w-3.5" />
+                        <span className="whitespace-nowrap">কুরআন মোডে দেখুন</span>
                       </button>
                     )}
                   </div>
@@ -1396,7 +1445,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {filteredPrograms.map((program) => {
                     const realIdx = RUQYAH_PROGRAMS.findIndex((p) => p.id === program.id);
-                    const isLoadingAudio = loadingId === `${program.id}-a`;
+                    const isLoadingAudio = ruqyahLoading && selectedRuqyahId === program.id;
 
                     return (
                       <div
@@ -1441,7 +1490,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
 
                           <button
                             type="button"
-                            onClick={() => handlePlayProgram(program, false)}
+                            onClick={() => handleOpenAndPlayRuqyah(program)}
                             disabled={Boolean(loadingId)}
                             className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-black/10 bg-black/[0.03] px-3.5 text-xs font-bold text-[#0F1F1A] hover:bg-black/[0.06] disabled:opacity-60 dark:border-white/15 dark:bg-white/[0.05] dark:text-white"
                           >
@@ -1581,16 +1630,12 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={() =>
-                      handlePlayRefs('manzil-audio', '৩৩ আয়াত (মঞ্জিল)', MANZIL_33_AYAT_REFS, false)
-                    }
+                    onClick={() => handleOpenAndPlayManzil('all')}
                     disabled={Boolean(loadingId)}
                     className="flex min-h-[44px] items-center gap-2 rounded-xl border border-[#D4A853]/40 bg-[#D4A853]/12 px-4 text-xs font-bold text-[#745118] dark:text-[#E7C57B]"
                   >
                     <Play className="h-4 w-4" />
-                    <span className="whitespace-nowrap">
-                      {loadingId === 'manzil-audio' ? 'লোড হচ্ছে...' : 'সম্পূর্ণ ৩৩ আয়াত শুনুন'}
-                    </span>
+                    <span className="whitespace-nowrap">সম্পূর্ণ ৩৩ আয়াত শুনুন</span>
                   </button>
 
                   <button
@@ -1631,11 +1676,6 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                   const lastAyah = group.ayahs[group.ayahs.length - 1];
                   const rangeLabel =
                     group.ayahs.length === 1 ? `আয়াত ${firstAyah}` : `আয়াত ${firstAyah}–${lastAyah}`;
-                  const groupRefs = group.ayahs.map((a) => ({
-                    surah: group.surah,
-                    ayah: a,
-                    surahNameBn: group.nameBn,
-                  }));
 
                   return (
                     <div
@@ -1660,9 +1700,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
 
                       <button
                         type="button"
-                        onClick={() =>
-                          handlePlayRefs(`manzil-${idx}`, `${group.nameBn} (${rangeLabel})`, groupRefs, true)
-                        }
+                        onClick={() => handleOpenAndPlayManzil(idx)}
                         className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl bg-white text-[#063D34] shadow-sm transition-colors hover:bg-[#063D34] hover:text-[#E7C57B] dark:bg-[#0D1A16] dark:text-[#E7C57B]"
                         aria-label={`${group.nameBn} শুনুন`}
                       >

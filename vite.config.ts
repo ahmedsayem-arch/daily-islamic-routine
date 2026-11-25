@@ -19,7 +19,7 @@ export default defineConfig(() => {
         manifest: {
           id: '/',
           name: 'Daily Islamic Routine',
-          short_name: 'Daily Islamic Routine',
+          short_name: 'DailyRoutine',
           description:
             'দৈনিক ইসলামিক রুটিন, নামাজের সময়সূচি, কুরআন মাজীদ তিলাওয়াত ও বাংলা অনুবাদ, সহীহ হাদিস, ৩৩ আয়াত এবং রুকাইয়া শারইয়াহ।',
           theme_color: '#050E0C',
@@ -27,6 +27,26 @@ export default defineConfig(() => {
           display: 'standalone',
           start_url: '/',
           scope: '/',
+          shortcuts: [
+            {
+              name: 'নামাজ ও তারিখ উইজেট',
+              short_name: 'উইজেট',
+              url: '/?widget=1',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+            {
+              name: 'কুরআন মাজীদ',
+              short_name: 'কুরআন',
+              url: '/?tab=quran',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+            {
+              name: 'রুকাইয়া ও হিসনুল মুসলিম',
+              short_name: 'রুকাইয়া',
+              url: '/?tab=ruqyah',
+              icons: [{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+            },
+          ],
           icons: [
             {
               src: '/pwa-192x192.png',
