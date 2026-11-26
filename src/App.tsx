@@ -1293,12 +1293,12 @@ export default function App() {
   }, [getActiveAudio, preloadNextTrackOnStandby, startTrackOnAudioElement]);
 
   const buildBismillahTrackForSurah = useCallback(
-    (surahNum: number, targetAyahNum: number): AudioTrackItem => {
+    (surahNum: number, targetAyahNum: number, isBanglaMode = false): AudioTrackItem => {
       const qari = selectedQariRef.current;
       const surahNameBn =
         ALL_SURAHS.find((s) => s.number === surahNum)?.nameBn || `সূরা ${surahNum}`;
       return {
-        id: `bismillah-${surahNum}-${targetAyahNum}-${Date.now()}`,
+        id: `bismillah-${isBanglaMode ? 'bntran-' : ''}${surahNum}-${targetAyahNum}-${Date.now()}`,
         titleBn: 'বিসমিল্লাহির রাহমানির রাহীম',
         subtitleBn: `সূরা ${surahNameBn} · ${qari.nameBn}`,
         arabic: 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
@@ -1385,7 +1385,8 @@ export default function App() {
       ) {
         const bismillahTrack = buildBismillahTrackForSurah(
           currentTrack.surah,
-          currentTrack.ayah
+          currentTrack.ayah,
+          currentTrack.id.startsWith('bntran-')
         );
         const curList = playlistRef.current;
         const nextList = [
@@ -1475,7 +1476,8 @@ export default function App() {
       ) {
         const bismillahTrack = buildBismillahTrackForSurah(
           requestedTarget.surah,
-          requestedTarget.ayah
+          requestedTarget.ayah,
+          requestedTarget.id.startsWith('bntran-')
         );
         finalTracks = [
           ...tracks.slice(0, safeIndex),
@@ -1869,6 +1871,7 @@ export default function App() {
                 selectedQari={selectedQari}
                 onChangeQari={handleChangeQari}
                 activeTrackKey={activeTrackKey}
+                activeTrackId={currentTrack?.id || null}
                 isPlaying={isPlaying}
                 settings={appSettings}
                 favoriteAyahs={favoriteAyahs}

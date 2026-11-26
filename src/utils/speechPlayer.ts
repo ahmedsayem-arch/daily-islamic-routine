@@ -1359,3 +1359,25 @@ export function useSpeechPlayer(): SpeechPlayerSnapshot {
 
   return snap;
 }
+
+export function buildBanglaSpeechChunksForAyah(rawText: string): string[] {
+  const prefs = speechPlayer.getVoicePrefs();
+  const normalized = expandBanglaIslamicHonorifics(rawText, prefs.expandHonorifics);
+  return splitIntoSpeakableChunks(normalized, 360);
+}
+
+export function buildBanglaMaleTtsUrlForText(chunkText: string): string {
+  const prefs = speechPlayer.getVoicePrefs();
+  const voice = resolveNeuralVoiceName('bn-BD', prefs);
+  const params = new URLSearchParams({
+    text: chunkText,
+    lang: 'bn-BD',
+    voice,
+    rate: prefs.rate.toFixed(2),
+    pitch: prefs.pitch.toFixed(2),
+    expand: prefs.expandHonorifics ? '1' : '0',
+    q: '96k',
+  });
+  return `/api/tts?${params.toString()}`;
+}
+

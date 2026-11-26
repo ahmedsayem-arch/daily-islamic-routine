@@ -30,7 +30,6 @@ import {
   QARI_RECITERS,
   QURAN_STUDY_IMG,
 } from '../data/islamicData';
-import { buildBanglaQuranSurahUrl } from '../data/banglaQuranAudio';
 import {
   cleanTafsirForReading,
   fetchSurahTafsir,
@@ -58,6 +57,8 @@ import {
   prewarmUpcomingAudioUrls,
 } from '../utils/offlineAudioCache';
 import {
+  buildBanglaMaleTtsUrlForText,
+  buildBanglaSpeechChunksForAyah,
   speechPlayer,
   type SpeechTrack,
   useSpeechPlayer,
@@ -70,6 +71,7 @@ interface QuranViewProps {
   selectedQari: QariReciter;
   onChangeQari: (qari: QariReciter) => void;
   activeTrackKey: string | null;
+  activeTrackId?: string | null;
   isPlaying: boolean;
   settings: AppSettings;
   favoriteAyahs: FavoriteAyahEntry[];
@@ -122,6 +124,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
   selectedQari,
   onChangeQari,
   activeTrackKey,
+  activeTrackId = null,
   isPlaying,
   settings,
   favoriteAyahs,
@@ -335,15 +338,42 @@ export const QuranView: React.FC<QuranViewProps> = ({
     };
   }, [selectedSurahNum, selectedQari]);
 
+  const isBanglaTranslationActive = Boolean(
+    activeTrackId &&
+      (activeTrackId.startsWith(`bntran-ar-${selectedSurahNum}:`) ||
+        activeTrackId.startsWith(`bntran-bn-${selectedSurahNum}:`) ||
+        activeTrackId.startsWith(`bismillah-bntran-${selectedSurahNum}-`))
+  );
+
+  const getSurahBanglaTtsUrls = (): string[] => {
+    const urls: string[] = [];
+    for (const a of ayahs) {
+      const chunks = buildBanglaSpeechChunksForAyah(a.bengali || '');
+      for (const ch of chunks) {
+        urls.push(buildBanglaMaleTtsUrlForText(ch));
+      }
+    }
+    return urls;
+  };
+
   useEffect(() => {
     let active = true;
-    const banglaUrl = buildBanglaQuranSurahUrl(selectedSurahNum);
-    countCachedAudioUrls([banglaUrl]).then((cnt) => {
-      if (active) setBanglaSurahSaved(cnt > 0);
-    });
     if (ayahs.length === 0) {
       setOfflineSavedCount(0);
+      setBanglaSurahSaved(false);
       return;
+    }
+    const firstBn = buildBanglaSpeechChunksForAyah(ayahs[0]?.bengali || '')[0];
+    const lastBn = buildBanglaSpeechChunksForAyah(ayahs[ayahs.length - 1]?.bengali || '')[0];
+    const sampleBnUrls = [firstBn, lastBn]
+      .filter((t): t is string => Boolean(t))
+      .map(buildBanglaMaleTtsUrlForText);
+    if (sampleBnUrls.length > 0) {
+      countCachedAudioUrls(sampleBnUrls).then((cnt) => {
+        if (active) setBanglaSurahSaved(cnt === sampleBnUrls.length);
+      });
+    } else {
+      setBanglaSurahSaved(false);
     }
     countCachedAudioUrls(ayahs.map((a) => a.audioUrl)).then((cnt) => {
       if (active) {
@@ -382,14 +412,22 @@ export const QuranView: React.FC<QuranViewProps> = ({
     };
   }, [readerOpen, settings.showTafsir, selectedSurahNum, activeTafsirEdition, tafsirReloadTick]);
 
+  const scrollElementSmoothToTop = (el: HTMLElement | null) => {
+    if (!el || typeof window === 'undefined') return;
+    const rect = el.getBoundingClientRect();
+    const targetTop = Math.max(0, window.scrollY + rect.top - 76);
+    try {
+      window.scrollTo({ top: targetTop, behavior: 'smooth' });
+    } catch {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
   const scrollAyahToTop = (trackId: string) => {
     if (typeof window === 'undefined') return;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const el = ayahElementRefs.current.get(trackId);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        scrollElementSmoothToTop(ayahElementRefs.current.get(trackId) || null);
       });
     });
   };
@@ -415,16 +453,16 @@ export const QuranView: React.FC<QuranViewProps> = ({
     if (!targetKey) return;
 
     if (targetKey === `${selectedSurahNum}:0`) {
-      bismillahBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      requestAnimationFrame(() => {
+        scrollElementSmoothToTop(bismillahBannerRef.current);
+      });
       return;
     }
 
-    const el = ayahElementRefs.current.get(targetKey);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    scrollAyahToTop(targetKey);
   }, [
     activeTrackKey,
+    activeTrackId,
     isPlaying,
     autoFollowAyah,
     ayahs.length,
@@ -438,13 +476,13 @@ export const QuranView: React.FC<QuranViewProps> = ({
 
   const handleDownloadSurahOffline = async () => {
     if (ayahs.length === 0 || offlineSavingProgress) return;
-    const banglaUrl = buildBanglaQuranSurahUrl(selectedSurahNum);
+    const banglaTtsUrls = getSurahBanglaTtsUrls();
     const bismillahUrl = buildEveryAyahUrl(selectedQari.everyAyahFolder, 1, 1);
     const ayahUrls = ayahs.map((a) => a.audioUrl);
     const urls =
       selectedSurahNum !== 1 && selectedSurahNum !== 9
-        ? [bismillahUrl, ...ayahUrls, banglaUrl]
-        : [...ayahUrls, banglaUrl];
+        ? [bismillahUrl, ...ayahUrls, ...banglaTtsUrls]
+        : [...ayahUrls, ...banglaTtsUrls];
     setOfflineSavingProgress({ done: 0, total: urls.length });
     try {
       await Promise.all([
@@ -454,9 +492,12 @@ export const QuranView: React.FC<QuranViewProps> = ({
         prefetchSurahTafsirForOffline(selectedSurahNum, activeTafsirEdition),
       ]);
       const updated = await countCachedAudioUrls(ayahUrls);
-      const bnCnt = await countCachedAudioUrls([banglaUrl]);
+      const bnCnt =
+        banglaTtsUrls.length > 0
+          ? await countCachedAudioUrls([banglaTtsUrls[0], banglaTtsUrls[banglaTtsUrls.length - 1]])
+          : 0;
       setOfflineSavedCount(updated);
-      setBanglaSurahSaved(bnCnt > 0);
+      setBanglaSurahSaved(bnCnt >= Math.min(2, banglaTtsUrls.length));
     } finally {
       setOfflineSavingProgress(null);
     }
@@ -584,25 +625,55 @@ export const QuranView: React.FC<QuranViewProps> = ({
     }
   };
 
-  const handlePlayBanglaTranslationSurah = () => {
-    const banglaUrl = buildBanglaQuranSurahUrl(selectedSurahNum);
-    const trackId = `bn-quran-${selectedSurahNum}`;
-    if (activeTrackKey === trackId) {
+  const handlePlayBanglaTranslationSurah = (startIndex = 0) => {
+    if (ayahs.length === 0) return;
+    if (startIndex === 0 && isBanglaTranslationActive) {
       onTogglePlay();
       return;
     }
-    const track: AudioTrackItem = {
-      id: trackId,
-      titleBn: `সূরা ${surahMeta.nameBn} (বাংলা অনুবাদসহ)`,
-      subtitleBn: 'মিশারি আল-আফাসি + ইসলামিক ফাউন্ডেশন বাংলাদেশ (পুরুষ কণ্ঠ)',
-      arabic: ayahs[0]?.arabic || surahMeta.nameAr,
-      tajweedArabic: ayahs[0]?.tajweedArabic,
-      meaningBn: `${surahMeta.meaningBn} · ইসলামিক ফাউন্ডেশন বাংলা অনুবাদ তিলাওয়াত`,
-      audioUrl: banglaUrl,
-      surah: selectedSurahNum,
-      ayah: 1,
-    };
-    onPlayPlaylist([track], 0, false);
+
+    const tracks: AudioTrackItem[] = [];
+    let targetPlayIndex = 0;
+
+    ayahs.forEach((a, idx) => {
+      if (idx === startIndex) {
+        targetPlayIndex = tracks.length;
+      }
+      tracks.push({
+        id: `bntran-ar-${selectedSurahNum}:${a.numberInSurah}`,
+        titleBn: `সূরা ${surahMeta.nameBn} · আয়াত ${a.numberInSurah}`,
+        subtitleBn: `${selectedQari.nameBn} · বাংলা অনুবাদসহ তিলাওয়াত`,
+        arabic: a.arabic,
+        tajweedArabic: a.tajweedArabic,
+        bengaliTranslit: a.bengaliTranslit,
+        meaningBn: a.bengali,
+        englishMeaning: a.english,
+        audioUrl: a.audioUrl,
+        surah: selectedSurahNum,
+        ayah: a.numberInSurah,
+      });
+
+      const bnChunks = buildBanglaSpeechChunksForAyah(a.bengali || '');
+      bnChunks.forEach((chunk, cIdx) => {
+        tracks.push({
+          id: `bntran-bn-${selectedSurahNum}:${a.numberInSurah}:${cIdx}`,
+          titleBn: `সূরা ${surahMeta.nameBn} · আয়াত ${a.numberInSurah} (বাংলা অনুবাদ)`,
+          subtitleBn: `${activeMaleVoiceLabels.bangla} · ${selectedQari.nameBn}`,
+          arabic: a.arabic,
+          tajweedArabic: a.tajweedArabic,
+          bengaliTranslit: a.bengaliTranslit,
+          meaningBn: a.bengali,
+          englishMeaning: a.english,
+          audioUrl: buildBanglaMaleTtsUrlForText(chunk),
+          surah: selectedSurahNum,
+          ayah: a.numberInSurah,
+        });
+      });
+    });
+
+    if (tracks.length > 0) {
+      onPlayPlaylist(tracks, targetPlayIndex, false);
+    }
   };
 
   const buildTracks = (): AudioTrackItem[] =>
@@ -1510,14 +1581,15 @@ export const QuranView: React.FC<QuranViewProps> = ({
 
                     <button
                       type="button"
-                      onClick={handlePlayBanglaTranslationSurah}
-                      className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition-colors ${
-                        activeTrackKey === `bn-quran-${selectedSurahNum}`
+                      disabled={loading || ayahs.length === 0}
+                      onClick={() => handlePlayBanglaTranslationSurah(0)}
+                      className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition-colors disabled:opacity-50 ${
+                        isBanglaTranslationActive
                           ? 'border-[#F6DC9B] bg-[#0D6E52] text-[#F6DC9B]'
                           : 'border-[#F6DC9B]/45 bg-[#D4A853]/15 text-[#F6DC9B] hover:bg-[#D4A853]/25'
                       }`}
                     >
-                      {activeTrackKey === `bn-quran-${selectedSurahNum}` && isPlaying ? (
+                      {isBanglaTranslationActive && isPlaying ? (
                         <Pause className="h-4 w-4" />
                       ) : (
                         <Play className="h-4 w-4" />
@@ -1882,6 +1954,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
                         }}
                         onClick={() => {
                           if (isThisTrack) onTogglePlay();
+                          else if (isBanglaTranslationActive) handlePlayBanglaTranslationSurah(idx);
                           else handlePlaySurah(idx, false);
                         }}
                         role="button"
@@ -1890,6 +1963,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
                             if (isThisTrack) onTogglePlay();
+                            else if (isBanglaTranslationActive) handlePlayBanglaTranslationSurah(idx);
                             else handlePlaySurah(idx, false);
                           }
                         }}
@@ -1989,6 +2063,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
                               type="button"
                               onClick={() => {
                                 if (isThisTrack) onTogglePlay();
+                                else if (isBanglaTranslationActive) handlePlayBanglaTranslationSurah(idx);
                                 else handlePlaySurah(idx, false);
                               }}
                               className={`flex min-h-[40px] min-w-[40px] items-center justify-center rounded-xl transition-colors ${

@@ -80,9 +80,34 @@ async function startServer() {
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
+        forwardConsole: false,
       },
       appType: 'spa',
     });
+
+    // When HMR & WebSocket are disabled in middleware mode, Vite 8's @vite/client still attempts
+    // `transport.connect(...)` to port 24678, throwing `WebSocket closed without opened.` in the browser.
+    // Keep CSS/error-overlay helpers intact while skipping the dead WebSocket connection.
+    app.get('/@vite/client', async (_req, res, next) => {
+      try {
+        const result = await vite.transformRequest('/@vite/client');
+        if (!result?.code) {
+          next();
+          return;
+        }
+        const patched = result.code.replace(
+          'transport.connect(createHMRHandler(handleMessage));',
+          '/* HMR WebSocket disabled in middleware mode */',
+        );
+        res.setHeader('Content-Type', 'text/javascript');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.status(200).send(patched);
+      } catch (err) {
+        next(err);
+      }
+    });
+
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
