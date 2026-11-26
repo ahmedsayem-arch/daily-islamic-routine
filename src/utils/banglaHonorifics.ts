@@ -31,8 +31,11 @@ function attachHonorificCleanly(
   return text.replace(pattern, (fullMatch: string, ...args: unknown[]) => {
     const offset = typeof args[args.length - 2] === 'number' ? (args[args.length - 2] as number) : 0;
     const prefixCapture = typeof args[0] === 'string' ? args[0] : '';
-    const before = text.slice(0, offset + prefixCapture.length);
-    const after = text.slice(offset + fullMatch.length);
+    const beforeEnd = offset + prefixCapture.length;
+    const beforeStart = Math.max(0, beforeEnd - 50);
+    const before = text.slice(beforeStart, beforeEnd);
+    const afterStart = offset + fullMatch.length;
+    const after = text.slice(afterStart, afterStart + 12);
     const phrase = resolver(before, fullMatch);
     const hasAttachedSuffix = /^-(?:এর|কে|র|তে|এ|ও)/.test(after);
     const leadingSpace = prefixCapture ? `${prefixCapture}` : ' ';

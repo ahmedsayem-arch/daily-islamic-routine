@@ -26,7 +26,12 @@ import { RuqyahAmolView } from './components/RuqyahAmolView';
 import { SeerahView } from './components/SeerahView';
 import { SettingsView } from './components/SettingsView';
 import { TasbihModal } from './components/TasbihModal';
-import { CITY_PRESETS, QARI_RECITERS } from './data/islamicData';
+import {
+  ALL_SURAHS,
+  buildEveryAyahUrl,
+  CITY_PRESETS,
+  QARI_RECITERS,
+} from './data/islamicData';
 import {
   type InAppNotificationAlert,
   usePrayerNotifications,
@@ -656,6 +661,11 @@ export default function App() {
     }
   }, []);
 
+  const BISMILLAH_RETURN_THRESHOLD_MS = 5 * 60 * 1000;
+  const LAST_ACTIVE_AT_KEY = 'noor_last_active_at_v1';
+  const LAST_AWAY_AT_KEY = 'noor_last_away_at_v1';
+  const NEEDS_RETURN_BISMILLAH_KEY = 'noor_needs_return_bismillah_v1';
+
   const playlistRef = useRef<AudioTrackItem[]>([]);
   const currentIndexRef = useRef<number>(0);
   const isLoopingRef = useRef<boolean>(false);
@@ -666,6 +676,28 @@ export default function App() {
   const activeTabRef = useRef<ActiveTab>(activeTab);
   const quranReaderStateRef = useRef(quranReaderState);
   const ruqyahReaderStateRef = useRef(ruqyahReaderState);
+  const selectedQariRef = useRef(selectedQari);
+  const playbackSourceTabRef = useRef(playbackSourceTab);
+  const lastAwayAtRef = useRef<number>(0);
+  const needsReturnBismillahRef = useRef<boolean>((() => {
+    try {
+      const now = Date.now();
+      const persisted = localStorage.getItem(NEEDS_RETURN_BISMILLAH_KEY) === '1';
+      const lastActive = Number(localStorage.getItem(LAST_ACTIVE_AT_KEY) || 0);
+      const lastAway = Number(localStorage.getItem(LAST_AWAY_AT_KEY) || 0);
+      const staleSession = lastActive === 0 || now - lastActive >= BISMILLAH_RETURN_THRESHOLD_MS;
+      const awayExceeded = lastAway > 0 && now - lastAway >= BISMILLAH_RETURN_THRESHOLD_MS;
+      const due = persisted || staleSession || awayExceeded;
+      if (due) {
+        localStorage.setItem(NEEDS_RETURN_BISMILLAH_KEY, '1');
+      }
+      localStorage.removeItem(LAST_AWAY_AT_KEY);
+      localStorage.setItem(LAST_ACTIVE_AT_KEY, String(now));
+      return due;
+    } catch {
+      return true;
+    }
+  })());
 
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -678,6 +710,17 @@ export default function App() {
   useEffect(() => {
     ruqyahReaderStateRef.current = ruqyahReaderState;
   }, [ruqyahReaderState]);
+
+  useEffect(() => {
+    selectedQariRef.current = selectedQari;
+    const bismillahUrl = buildEveryAyahUrl(selectedQari.everyAyahFolder, 1, 1);
+    prewarmUpcomingAudioUrls([bismillahUrl]);
+    prefetchAndCacheAudioUrls([bismillahUrl]);
+  }, [selectedQari]);
+
+  useEffect(() => {
+    playbackSourceTabRef.current = playbackSourceTab;
+  }, [playbackSourceTab]);
 
   useEffect(() => {
     playlistRef.current = playlist;
@@ -694,6 +737,98 @@ export default function App() {
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    const touchActive = () => {
+      try {
+        localStorage.setItem(LAST_ACTIVE_AT_KEY, String(Date.now()));
+      } catch {
+        // ignore
+      }
+    };
+
+    const markReturnedIfAwayLongEnough = () => {
+      const now = Date.now();
+      let awaySince = lastAwayAtRef.current;
+      if (!awaySince) {
+        try {
+          awaySince = Number(localStorage.getItem(LAST_AWAY_AT_KEY) || 0);
+        } catch {
+          awaySince = 0;
+        }
+      }
+      if (
+        awaySince > 0 &&
+        now - awaySince >= BISMILLAH_RETURN_THRESHOLD_MS &&
+        !isPlayingRef.current
+      ) {
+        needsReturnBismillahRef.current = true;
+        try {
+          localStorage.setItem(NEEDS_RETURN_BISMILLAH_KEY, '1');
+        } catch {
+          // ignore
+        }
+      }
+      lastAwayAtRef.current = 0;
+      try {
+        localStorage.removeItem(LAST_AWAY_AT_KEY);
+      } catch {
+        // ignore
+      }
+      touchActive();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        const now = Date.now();
+        touchActive();
+        if (!isPlayingRef.current && speechPlayer.getSnapshot().status !== 'playing') {
+          lastAwayAtRef.current = now;
+          try {
+            localStorage.setItem(LAST_AWAY_AT_KEY, String(now));
+          } catch {
+            // ignore
+          }
+        }
+      } else if (document.visibilityState === 'visible') {
+        markReturnedIfAwayLongEnough();
+      }
+    };
+
+    const handlePageHide = () => {
+      const now = Date.now();
+      touchActive();
+      if (!isPlayingRef.current && speechPlayer.getSnapshot().status !== 'playing') {
+        lastAwayAtRef.current = now;
+        try {
+          localStorage.setItem(LAST_AWAY_AT_KEY, String(now));
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    const handlePageShow = () => {
+      markReturnedIfAwayLongEnough();
+    };
+
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        touchActive();
+      }
+    }, 20000);
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageShow);
+
+    return () => {
+      window.clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, []);
 
   const speechSnap = useSpeechPlayer();
 
@@ -1157,6 +1292,70 @@ export default function App() {
     };
   }, [getActiveAudio, preloadNextTrackOnStandby, startTrackOnAudioElement]);
 
+  const buildBismillahTrackForSurah = useCallback(
+    (surahNum: number, targetAyahNum: number): AudioTrackItem => {
+      const qari = selectedQariRef.current;
+      const surahNameBn =
+        ALL_SURAHS.find((s) => s.number === surahNum)?.nameBn || `সূরা ${surahNum}`;
+      return {
+        id: `bismillah-${surahNum}-${targetAyahNum}-${Date.now()}`,
+        titleBn: 'বিসমিল্লাহির রাহমানির রাহীম',
+        subtitleBn: `সূরা ${surahNameBn} · ${qari.nameBn}`,
+        arabic: 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
+        meaningBn: 'পরম করুণাময় অসীম দয়ালু আল্লাহর নামে শুরু করছি',
+        audioUrl: buildEveryAyahUrl(qari.everyAyahFolder, 1, 1),
+        surah: surahNum,
+        ayah: 0,
+      };
+    },
+    []
+  );
+
+  const shouldPrependBismillah = useCallback(
+    (target: AudioTrackItem, sourceTab: 'quran' | 'ruqyah'): boolean => {
+      if (sourceTab !== 'quran') return false;
+      if (
+        typeof target.surah !== 'number' ||
+        typeof target.ayah !== 'number' ||
+        target.ayah < 1
+      ) {
+        return false;
+      }
+      if (target.id.startsWith('bn-quran-') || target.id.startsWith('bismillah-')) {
+        return false;
+      }
+      // Surah Al-Fatihah Ayah 1 IS already Bismillah
+      if (target.surah === 1 && target.ayah === 1) {
+        needsReturnBismillahRef.current = false;
+        try {
+          localStorage.removeItem(NEEDS_RETURN_BISMILLAH_KEY);
+        } catch {
+          // ignore
+        }
+        return false;
+      }
+      // Surah At-Tawbah never starts with Bismillah
+      if (target.surah === 9 && target.ayah === 1) {
+        return false;
+      }
+
+      const isSurahBeginning = target.ayah === 1 && target.surah !== 1 && target.surah !== 9;
+      const isDueAfterReturn = needsReturnBismillahRef.current && target.surah !== 9;
+
+      if (isSurahBeginning || isDueAfterReturn) {
+        needsReturnBismillahRef.current = false;
+        try {
+          localStorage.removeItem(NEEDS_RETURN_BISMILLAH_KEY);
+        } catch {
+          // ignore
+        }
+        return true;
+      }
+      return false;
+    },
+    []
+  );
+
   const handleTogglePlay = useCallback(() => {
     const audio = getActiveAudio();
     if (!audio || !currentTrack) return;
@@ -1175,6 +1374,32 @@ export default function App() {
       setAudioError(null);
       isPlayingRef.current = true;
       setIsPlaying(true);
+
+      const curIdx = currentIndexRef.current;
+      const sourceTab = playbackSourceTabRef.current || 'quran';
+      if (
+        sourceTab === 'quran' &&
+        shouldPrependBismillah(currentTrack, 'quran') &&
+        typeof currentTrack.surah === 'number' &&
+        typeof currentTrack.ayah === 'number'
+      ) {
+        const bismillahTrack = buildBismillahTrackForSurah(
+          currentTrack.surah,
+          currentTrack.ayah
+        );
+        const curList = playlistRef.current;
+        const nextList = [
+          ...curList.slice(0, curIdx),
+          bismillahTrack,
+          ...curList.slice(curIdx),
+        ];
+        playlistRef.current = nextList;
+        currentIndexRef.current = curIdx;
+        setPlaylist(nextList);
+        setCurrentIndex(curIdx);
+        startTrackOnAudioElement(bismillahTrack, curIdx, true);
+        return;
+      }
 
       if (
         audio.error ||
@@ -1215,9 +1440,11 @@ export default function App() {
         });
     }
   }, [
+    buildBismillahTrackForSurah,
     currentTrack,
     getActiveAudio,
     preloadNextTrackOnStandby,
+    shouldPrependBismillah,
     startTrackOnAudioElement,
     unlockStandbySlotOnGesture,
   ]);
@@ -1235,16 +1462,36 @@ export default function App() {
       unlockStandbySlotOnGesture();
       audioKeepAlive.acquire('quran');
       const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
-      const target = tracks[safeIndex] || tracks[0];
-      playlistRef.current = tracks;
+      const requestedTarget = tracks[safeIndex] || tracks[0];
+      const sourceTab: 'quran' | 'ruqyah' =
+        activeTabRef.current === 'ruqyah' ? 'ruqyah' : 'quran';
+
+      let finalTracks = tracks;
+      let target = requestedTarget;
+      if (
+        shouldPrependBismillah(requestedTarget, sourceTab) &&
+        typeof requestedTarget.surah === 'number' &&
+        typeof requestedTarget.ayah === 'number'
+      ) {
+        const bismillahTrack = buildBismillahTrackForSurah(
+          requestedTarget.surah,
+          requestedTarget.ayah
+        );
+        finalTracks = [
+          ...tracks.slice(0, safeIndex),
+          bismillahTrack,
+          ...tracks.slice(safeIndex),
+        ];
+        target = bismillahTrack;
+      }
+
+      playlistRef.current = finalTracks;
       currentIndexRef.current = safeIndex;
       isPlayingRef.current = true;
-      setPlaylist(tracks);
+      setPlaylist(finalTracks);
       setCurrentIndex(safeIndex);
       setIsPlaying(true);
       setAudioStatus('loading');
-      const sourceTab: 'quran' | 'ruqyah' =
-        activeTabRef.current === 'ruqyah' ? 'ruqyah' : 'quran';
       setPlaybackSourceTab(sourceTab);
 
       if (sourceTab === 'quran') {
@@ -1267,7 +1514,12 @@ export default function App() {
 
       startTrackOnAudioElement(target, safeIndex, true);
     },
-    [startTrackOnAudioElement, unlockStandbySlotOnGesture]
+    [
+      buildBismillahTrackForSurah,
+      shouldPrependBismillah,
+      startTrackOnAudioElement,
+      unlockStandbySlotOnGesture,
+    ]
   );
 
   const handlePrev = useCallback(() => {
