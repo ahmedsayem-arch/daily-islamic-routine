@@ -7,6 +7,14 @@ class BackgroundAudioKeepAlive {
   private source: AudioBufferSourceNode | null = null;
   private activeOwners = new Set<'quran' | 'speech'>();
   private visibilityListenerAttached = false;
+  private releaseTimer: number | null = null;
+
+  private clearReleaseTimer() {
+    if (this.releaseTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.releaseTimer);
+      this.releaseTimer = null;
+    }
+  }
 
   private attachVisibilityListener() {
     if (this.visibilityListenerAttached || typeof document === 'undefined') return;
@@ -20,6 +28,7 @@ class BackgroundAudioKeepAlive {
 
   private ensureRunning() {
     if (typeof window === 'undefined') return;
+    this.clearReleaseTimer();
     this.attachVisibilityListener();
 
     const AudioCtx =
@@ -61,23 +70,35 @@ class BackgroundAudioKeepAlive {
   }
 
   acquire(owner: 'quran' | 'speech') {
+    this.clearReleaseTimer();
     this.activeOwners.add(owner);
     this.ensureRunning();
   }
 
   pulse() {
     if (this.activeOwners.size > 0) {
+      this.clearReleaseTimer();
       this.ensureRunning();
     }
   }
 
   release(owner: 'quran' | 'speech') {
     this.activeOwners.delete(owner);
-    if (
-      this.activeOwners.size === 0 &&
-      this.ctx &&
-      this.ctx.state === 'running'
-    ) {
+    if (this.activeOwners.size > 0) return;
+
+    this.clearReleaseTimer();
+    if (typeof window !== 'undefined') {
+      this.releaseTimer = window.setTimeout(() => {
+        this.releaseTimer = null;
+        if (
+          this.activeOwners.size === 0 &&
+          this.ctx &&
+          this.ctx.state === 'running'
+        ) {
+          void this.ctx.suspend().catch(() => {});
+        }
+      }, 180);
+    } else if (this.ctx && this.ctx.state === 'running') {
       void this.ctx.suspend().catch(() => {});
     }
   }

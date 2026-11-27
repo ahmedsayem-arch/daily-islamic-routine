@@ -2,7 +2,23 @@ export const OFFLINE_AUDIO_CACHE_NAME = 'quran-audio-cache';
 
 const resolvedObjectUrlMap = new Map<string, string>();
 const inFlightPrewarms = new Set<string>();
+const ttsPrefetchQueue: string[] = [];
+let activeTtsPrefetches = 0;
 const MAX_RESOLVED_BLOB_URLS = 64;
+const MAX_CONCURRENT_TTS_PREFETCH = 2;
+
+async function findInAnyCache(
+  primaryCache: Cache,
+  url: string
+): Promise<Response | undefined> {
+  const direct = await primaryCache.match(url);
+  if (direct) return direct;
+  try {
+    return (await window.caches.match(url)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function isValidAudioResponse(res: Response | undefined | null): res is Response {
   if (!res || res.type === 'opaque' || !res.ok) return false;
@@ -47,7 +63,7 @@ export async function countCachedAudioUrls(urls: string[]): Promise<number> {
     const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
     let count = 0;
     for (const url of urls) {
-      const match = await cache.match(url);
+      const match = await findInAnyCache(cache, url);
       if (match) count += 1;
     }
     return count;
@@ -78,8 +94,14 @@ export async function downloadAudioUrlsForOffline(
     await Promise.all(
       batch.map(async (url) => {
         try {
-          const existing = await cache.match(url);
-          if (existing && existing.type !== 'opaque') {
+          const existingDirect = await cache.match(url);
+          if (existingDirect && existingDirect.type !== 'opaque') {
+            saved += 1;
+            return;
+          }
+          const crossCacheHit = await findInAnyCache(cache, url);
+          if (crossCacheHit && crossCacheHit.type !== 'opaque') {
+            await cache.put(url, crossCacheHit.clone());
             saved += 1;
             return;
           }
@@ -87,7 +109,7 @@ export async function downloadAudioUrlsForOffline(
           if (response) {
             await cache.put(url, response);
             saved += 1;
-          } else if (existing) {
+          } else if (existingDirect || crossCacheHit) {
             // Keep previously cached opaque entry if offline
             saved += 1;
           } else {
@@ -171,7 +193,7 @@ export async function resolveAndPrewarmAudioUrl(remoteUrl: string): Promise<stri
   inFlightPrewarms.add(remoteUrl);
   try {
     const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
-    let match = await cache.match(remoteUrl);
+    let match = await findInAnyCache(cache, remoteUrl);
 
     // Upgrade legacy opaque cache entry to CORS-readable response when online
     if (match && match.type === 'opaque' && typeof navigator !== 'undefined' && navigator.onLine) {
@@ -206,6 +228,47 @@ export function prewarmUpcomingAudioUrls(urls: string[]): void {
   }
 }
 
+async function prefetchSingleAudioUrl(url: string): Promise<void> {
+  try {
+    if (!isCacheStorageSupported()) return;
+    const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
+    let match = await findInAnyCache(cache, url);
+    if (!match || match.type === 'opaque') {
+      const corsRes = await fetch(url, { mode: 'cors' }).catch(() => null);
+      if (corsRes && corsRes.ok) {
+        await cache.put(url, corsRes.clone());
+        match = corsRes;
+      }
+    }
+    if (isValidAudioResponse(match)) {
+      const blob = await match.blob();
+      if (blob.size > 0) {
+        const objUrl = URL.createObjectURL(blob);
+        rememberResolvedObjectUrl(url, objUrl);
+      }
+    }
+  } catch {
+    // Silent prefetch failure is harmless
+  } finally {
+    inFlightPrewarms.delete(url);
+  }
+}
+
+function pumpTtsPrefetchQueue(): void {
+  while (
+    activeTtsPrefetches < MAX_CONCURRENT_TTS_PREFETCH &&
+    ttsPrefetchQueue.length > 0
+  ) {
+    const nextUrl = ttsPrefetchQueue.shift();
+    if (!nextUrl) continue;
+    activeTtsPrefetches += 1;
+    void prefetchSingleAudioUrl(nextUrl).finally(() => {
+      activeTtsPrefetches = Math.max(0, activeTtsPrefetches - 1);
+      pumpTtsPrefetchQueue();
+    });
+  }
+}
+
 /**
  * Background-fetches upcoming small Ayah MP3s into CacheStorage + in-memory blob: URLs
  * while online so transitions remain gapless even after the screen turns off.
@@ -224,30 +287,11 @@ export function prefetchAndCacheAudioUrls(urls: string[]): void {
       continue;
     }
     inFlightPrewarms.add(url);
-    void (async () => {
-      try {
-        if (!isCacheStorageSupported()) return;
-        const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
-        let match = await cache.match(url);
-        if (!match || match.type === 'opaque') {
-          const corsRes = await fetch(url, { mode: 'cors' }).catch(() => null);
-          if (corsRes && corsRes.ok) {
-            await cache.put(url, corsRes.clone());
-            match = corsRes;
-          }
-        }
-        if (isValidAudioResponse(match)) {
-          const blob = await match.blob();
-          if (blob.size > 0) {
-            const objUrl = URL.createObjectURL(blob);
-            rememberResolvedObjectUrl(url, objUrl);
-          }
-        }
-      } catch {
-        // Silent prefetch failure is harmless
-      } finally {
-        inFlightPrewarms.delete(url);
-      }
-    })();
+    if (url.startsWith('/api/tts')) {
+      ttsPrefetchQueue.push(url);
+      pumpTtsPrefetchQueue();
+    } else {
+      void prefetchSingleAudioUrl(url);
+    }
   }
 }

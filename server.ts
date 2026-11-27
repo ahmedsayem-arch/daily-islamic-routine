@@ -116,10 +116,19 @@ async function startServer() {
           next();
           return;
         }
-        const patched = result.code.replace(
-          'transport.connect(createHMRHandler(handleMessage));',
-          '/* HMR WebSocket disabled in middleware mode */',
-        );
+        const patched = result.code
+          .replace(
+            'transport.connect(createHMRHandler(handleMessage));',
+            '/* HMR WebSocket disabled in middleware mode */',
+          )
+          .replace(
+            'else throw new SendBeforeConnectError("send was called before connect");',
+            'else return;',
+          )
+          .replace(
+            'else throw new SendBeforeConnectError("invoke was called before connect");',
+            'else return;',
+          );
         res.setHeader('Content-Type', 'text/javascript');
         res.setHeader('Cache-Control', 'no-cache');
         res.status(200).send(patched);

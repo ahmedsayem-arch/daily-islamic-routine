@@ -668,7 +668,9 @@ export default function App() {
   const isPlayingRef = useRef<boolean>(false);
   const activeLoadedRemoteUrlRef = useRef<string | null>(null);
   const playAttemptIdRef = useRef<number>(0);
+  const offlineErrorAttemptRef = useRef<number>(-1);
   const ignorePauseEventRef = useRef<boolean>(false);
+  const skipNextTabScrollRef = useRef<boolean>(false);
   const activeTabRef = useRef<ActiveTab>(activeTab);
   const quranReaderStateRef = useRef(quranReaderState);
   const ruqyahReaderStateRef = useRef(ruqyahReaderState);
@@ -885,10 +887,15 @@ export default function App() {
 
   useEffect(() => {
     return speechPlayer.onBeforeStart(() => {
-      ignorePauseEventRef.current = true;
       const el = audioRef.current;
       if (el && !el.paused) {
+        ignorePauseEventRef.current = true;
         el.pause();
+        window.setTimeout(() => {
+          ignorePauseEventRef.current = false;
+        }, 250);
+      } else {
+        ignorePauseEventRef.current = false;
       }
       audioKeepAlive.release('quran');
       isPlayingRef.current = false;
@@ -934,6 +941,8 @@ export default function App() {
         if (targetEl.error) {
           targetEl.load();
         }
+      } else if (targetEl.ended) {
+        targetEl.currentTime = 0;
       }
 
       setMediaSessionMetadata({
@@ -1093,6 +1102,27 @@ export default function App() {
       if (list.length === 0) return;
       const curIdx = currentIndexRef.current;
       const curTrack = list[curIdx];
+      const attemptId = playAttemptIdRef.current;
+
+      const advanceOrError = () => {
+        if (attemptId !== playAttemptIdRef.current) return;
+        if (curIdx < list.length - 1 && isPlayingRef.current) {
+          const nextIdx = curIdx + 1;
+          const nextTrack = list[nextIdx];
+          if (nextTrack) {
+            setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
+            currentIndexRef.current = nextIdx;
+            startTrackOnAudioElement(nextTrack, nextIdx, true);
+            setCurrentIndex(nextIdx);
+            return;
+          }
+        }
+        audioKeepAlive.release('quran');
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        setAudioStatus('error');
+        setMediaSessionPlaybackState('paused');
+      };
 
       if (curTrack && audio.src.startsWith('blob:') && curTrack.audioUrl) {
         invalidateResolvedAudioUrl(curTrack.audioUrl);
@@ -1108,24 +1138,36 @@ export default function App() {
         return;
       }
 
-      if (curIdx < list.length - 1 && isPlayingRef.current) {
-        const nextIdx = curIdx + 1;
-        const nextTrack = list[nextIdx];
-        if (nextTrack) {
-          setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
-          currentIndexRef.current = nextIdx;
-          startTrackOnAudioElement(nextTrack, nextIdx, true);
-          setCurrentIndex(nextIdx);
-          return;
-        }
+      if (
+        curTrack &&
+        curTrack.audioUrl &&
+        offlineErrorAttemptRef.current !== attemptId
+      ) {
+        offlineErrorAttemptRef.current = attemptId;
+        void resolveAndPrewarmAudioUrl(curTrack.audioUrl).then((resolved) => {
+          if (attemptId !== playAttemptIdRef.current || targetElCheck() !== audio) {
+            return;
+          }
+          if (resolved !== curTrack.audioUrl && isPlayingRef.current) {
+            ignorePauseEventRef.current = true;
+            audio.src = resolved;
+            audio.play().catch(() => {
+              ignorePauseEventRef.current = false;
+              advanceOrError();
+            });
+            return;
+          }
+          advanceOrError();
+        });
+        return;
       }
 
-      audioKeepAlive.release('quran');
-      isPlayingRef.current = false;
-      setIsPlaying(false);
-      setAudioStatus('error');
-      setMediaSessionPlaybackState('paused');
+      advanceOrError();
     };
+
+    function targetElCheck() {
+      return audioRef.current;
+    }
 
     audio.addEventListener('loadstart', handleLoadStart);
     audio.addEventListener('waiting', handleWaiting);
@@ -1531,6 +1573,7 @@ export default function App() {
         surahNum: targetSurahNum,
         seq: (prev?.seq || 0) + 1,
       }));
+      skipNextTabScrollRef.current = true;
       setActiveTab('quran');
       return;
     }
@@ -1546,6 +1589,7 @@ export default function App() {
           audioSourceContext?.tab === 'ruqyah' ? audioSourceContext.manzilGroup : undefined,
         seq: (prev?.seq || 0) + 1,
       }));
+      skipNextTabScrollRef.current = true;
       setActiveTab('ruqyah');
     }
   }, [audioSourceContext, playbackSourceTab, currentTrack]);
@@ -1558,6 +1602,7 @@ export default function App() {
         surahNum: speechSourceContext.surahNum,
         seq: (prev?.seq || 0) + 1,
       }));
+      skipNextTabScrollRef.current = true;
       setActiveTab('quran');
     } else if (speechSourceContext.tab === 'hadith') {
       setHadithRouteIntent((prev) => ({
@@ -1588,6 +1633,10 @@ export default function App() {
   }, [speechSourceContext]);
 
   useEffect(() => {
+    if (skipNextTabScrollRef.current) {
+      skipNextTabScrollRef.current = false;
+      return;
+    }
     try {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch {

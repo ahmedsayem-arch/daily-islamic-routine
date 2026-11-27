@@ -255,6 +255,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   const [amolImgFailed, setAmolImgFailed] = useState(false);
   const [autoFollowAyah, setAutoFollowAyah] = useState(true);
   const ayahElementRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const scrollFollowTimerRef = useRef<number | null>(null);
   const pendingRuqyahPlayIdRef = useRef<string | null>(null);
   const pendingManzilPlayRef = useRef<boolean>(false);
 
@@ -508,10 +509,57 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   // Smoothly auto-scroll active Ayah cleanly to the top inside Quran-style Ruqyah / Manzil reader
   useEffect(() => {
     if (!autoFollowAyah || !activeTrackKey || ruqyahLoading || manzilLoading) return;
-    const el = ayahElementRefs.current.get(activeTrackKey);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (typeof window === 'undefined') return;
+
+    const findEl = () => {
+      const fromMap = ayahElementRefs.current.get(activeTrackKey);
+      if (fromMap && fromMap.isConnected) return fromMap;
+      if (typeof document !== 'undefined') {
+        return document.querySelector<HTMLElement>(`[data-ruqyah-track="${activeTrackKey}"]`);
+      }
+      return null;
+    };
+
+    const getVisualRect = (el: HTMLElement) => {
+      const rects = el.getClientRects();
+      return rects.length > 0 && rects[0].height > 0 ? rects[0] : el.getBoundingClientRect();
+    };
+
+    const align = () => {
+      const el = findEl();
+      if (!el) return;
+      const rect = getVisualRect(el);
+      window.scrollTo({
+        top: Math.max(0, window.scrollY + rect.top - 78),
+        behavior: 'smooth',
+      });
+    };
+
+    if (scrollFollowTimerRef.current !== null) {
+      window.clearTimeout(scrollFollowTimerRef.current);
+      scrollFollowTimerRef.current = null;
     }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(align);
+    });
+
+    scrollFollowTimerRef.current = window.setTimeout(() => {
+      scrollFollowTimerRef.current = null;
+      const el = findEl();
+      if (!el) return;
+      const rect = getVisualRect(el);
+      if (Math.abs(rect.top - 78) > 36) {
+        align();
+      }
+    }, 520);
+
+    return () => {
+      if (scrollFollowTimerRef.current !== null) {
+        window.clearTimeout(scrollFollowTimerRef.current);
+        scrollFollowTimerRef.current = null;
+      }
+    };
   }, [
     activeTrackKey,
     autoFollowAyah,
@@ -1045,6 +1093,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                           </div>
                         )}
                         <span
+                          data-ruqyah-track={pairKey}
                           ref={(el) => {
                             if (el) ayahElementRefs.current.set(pairKey, el);
                             else ayahElementRefs.current.delete(pairKey);
@@ -1106,6 +1155,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
                         )}
 
                         <article
+                          data-ruqyah-track={pairKey}
                           ref={(el) => {
                             if (el) ayahElementRefs.current.set(pairKey, el);
                             else ayahElementRefs.current.delete(pairKey);
