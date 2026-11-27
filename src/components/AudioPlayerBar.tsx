@@ -321,8 +321,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                   </span>
                 )}
               </div>
-              <p className={`truncate text-xs ${tokens.miniSubtitle}`}>
-                {statusLabel} · {track.subtitleBn} ·{' '}
+              <p className={`truncate text-xs ${errorMsg ? tokens.errorText : tokens.miniSubtitle}`}>
+                {errorMsg || `${statusLabel} · ${track.subtitleBn}`} ·{' '}
                 <span className="font-mono-num">
                   {currentIndex + 1}/{playlist.length}
                 </span>

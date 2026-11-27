@@ -22,6 +22,7 @@ async function findInAnyCache(
 
 function isValidAudioResponse(res: Response | undefined | null): res is Response {
   if (!res || res.type === 'opaque' || !res.ok) return false;
+  if (res.url && res.url.includes('__cookie_check')) return false;
   const ctype = (res.headers.get('content-type') || '').toLowerCase();
   if (!ctype) return true;
   return (
@@ -30,6 +31,22 @@ function isValidAudioResponse(res: Response | undefined | null): res is Response
     ctype.includes('mp3') ||
     ctype.includes('octet-stream')
   );
+}
+
+async function fetchPlayableAudioResponse(url: string): Promise<Response | null> {
+  const isSameOrigin = url.startsWith('/');
+  try {
+    const res = await fetch(
+      url,
+      isSameOrigin ? { credentials: 'same-origin' } : { mode: 'cors' }
+    );
+    if (isValidAudioResponse(res)) {
+      return res;
+    }
+  } catch {
+    // network or CORS blocked
+  }
+  return null;
 }
 
 export function isCacheStorageSupported(): boolean {
@@ -183,11 +200,27 @@ export function getFastPlayableAudioUrlSync(remoteUrl: string): string {
  * Resolves cached audio from CacheStorage into a seekable in-memory blob: URL
  * so offline & background screen-off playback works without Service Worker or Range hiccups.
  */
-export async function resolveAndPrewarmAudioUrl(remoteUrl: string): Promise<string> {
+export async function resolveAndPrewarmAudioUrl(
+  remoteUrl: string,
+  allowNetworkFallback = false
+): Promise<string> {
   if (!remoteUrl) return remoteUrl;
   const cachedBlobUrl = resolvedObjectUrlMap.get(remoteUrl);
   if (cachedBlobUrl) return cachedBlobUrl;
-  if (!isCacheStorageSupported()) return remoteUrl;
+  if (!isCacheStorageSupported()) {
+    if (allowNetworkFallback && typeof navigator !== 'undefined' && navigator.onLine !== false) {
+      const netRes = await fetchPlayableAudioResponse(remoteUrl);
+      if (netRes) {
+        const blob = await netRes.blob();
+        if (blob.size > 0) {
+          const objUrl = URL.createObjectURL(blob);
+          rememberResolvedObjectUrl(remoteUrl, objUrl);
+          return objUrl;
+        }
+      }
+    }
+    return remoteUrl;
+  }
   if (inFlightPrewarms.has(remoteUrl)) return remoteUrl;
 
   inFlightPrewarms.add(remoteUrl);
@@ -195,10 +228,19 @@ export async function resolveAndPrewarmAudioUrl(remoteUrl: string): Promise<stri
     const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
     let match = await findInAnyCache(cache, remoteUrl);
 
-    // Upgrade legacy opaque cache entry to CORS-readable response when online
-    if (match && match.type === 'opaque' && typeof navigator !== 'undefined' && navigator.onLine) {
-      const upgraded = await fetch(remoteUrl, { mode: 'cors' }).catch(() => null);
-      if (upgraded && upgraded.ok) {
+    if (match && match.type !== 'opaque' && !isValidAudioResponse(match)) {
+      await cache.delete(remoteUrl).catch(() => {});
+      match = undefined;
+    }
+
+    // Upgrade legacy opaque cache entry or fetch directly when error fallback requests network recovery
+    if (
+      ((!match && allowNetworkFallback) || (match && match.type === 'opaque')) &&
+      typeof navigator !== 'undefined' &&
+      navigator.onLine !== false
+    ) {
+      const upgraded = await fetchPlayableAudioResponse(remoteUrl);
+      if (upgraded) {
         await cache.put(remoteUrl, upgraded.clone());
         match = upgraded;
       }
@@ -233,11 +275,15 @@ async function prefetchSingleAudioUrl(url: string): Promise<void> {
     if (!isCacheStorageSupported()) return;
     const cache = await window.caches.open(OFFLINE_AUDIO_CACHE_NAME);
     let match = await findInAnyCache(cache, url);
+    if (match && match.type !== 'opaque' && !isValidAudioResponse(match)) {
+      await cache.delete(url).catch(() => {});
+      match = undefined;
+    }
     if (!match || match.type === 'opaque') {
-      const corsRes = await fetch(url, { mode: 'cors' }).catch(() => null);
-      if (corsRes && corsRes.ok) {
-        await cache.put(url, corsRes.clone());
-        match = corsRes;
+      const netRes = await fetchPlayableAudioResponse(url);
+      if (netRes) {
+        await cache.put(url, netRes.clone());
+        match = netRes;
       }
     }
     if (isValidAudioResponse(match)) {

@@ -734,8 +734,7 @@ export async function fetchFullWrittenRaheeqAlMakhtum(): Promise<{
       const titleBn = seenCount > 0 ? `${baseTitle} (পর্ব ${seenCount + 1})` : baseTitle;
 
       // Group every 4-5 Bengali sentences into clean readable paragraphs
-      const sentences = partText
-        .split(/(?<=।)\s+/)
+      const sentences = (partText.match(/[^।]+।?/g) || [partText])
         .map((s) => s.trim())
         .filter((s) => s.length > 4);
 

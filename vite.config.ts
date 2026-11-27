@@ -63,6 +63,10 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
+          navigateFallbackDenylist: [/^\/api\//],
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
           globIgnores: ['**/aistudio/**'],
           runtimeCaching: [
@@ -109,21 +113,6 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: /^https:\/\/everyayah\.com\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'quran-audio-cache',
-                expiration: {
-                  maxEntries: 1200,
-                  maxAgeSeconds: 60 * 60 * 24 * 90,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-                rangeRequests: true,
-              },
-            },
-            {
               urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
               handler: 'CacheFirst',
               options: {
@@ -165,39 +154,10 @@ export default defineConfig(() => {
                 },
               },
             },
-            {
-              urlPattern: /^https:\/\/archive\.org\/.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'seerah-book-cache',
-                expiration: {
-                  maxEntries: 10,
-                  maxAgeSeconds: 60 * 60 * 24 * 90,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-            {
-              urlPattern: /\/api\/tts.*/i,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'noor-male-tts-cache',
-                expiration: {
-                  maxEntries: 500,
-                  maxAgeSeconds: 60 * 60 * 24 * 60,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-                rangeRequests: true,
-              },
-            },
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),

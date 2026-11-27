@@ -73,6 +73,7 @@ interface RuqyahAmolViewProps {
   onUpdateSettings?: (patch: Partial<AppSettings>) => void;
   onPlayPlaylist: (tracks: AudioTrackItem[], startIndex: number, openVisual?: boolean) => void;
   onTogglePlay: () => void;
+  onPrimeAudio?: () => void;
   onReaderStateChange?: (state: {
     subTab: 'ruqyah' | 'manzil' | 'azkar';
     selectedRuqyahId: string | null;
@@ -208,6 +209,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
   onUpdateSettings,
   onPlayPlaylist,
   onTogglePlay,
+  onPrimeAudio,
   onReaderStateChange,
 }) => {
   const [subTab, setSubTab] = useState<SubTab>(routeIntent?.subTab || 'ruqyah');
@@ -587,6 +589,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
       scrollTopSmooth();
       return;
     }
+    onPrimeAudio?.();
     pendingRuqyahPlayIdRef.current = program.id;
     setSelectedRuqyahId(program.id);
     scrollTopSmooth();
@@ -609,6 +612,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
       scrollTopSmooth();
       return;
     }
+    onPrimeAudio?.();
     pendingManzilPlayRef.current = true;
     setManzilGroupFilter(groupIndex);
     setManzilReaderOpen(true);
@@ -621,6 +625,7 @@ export const RuqyahAmolView: React.FC<RuqyahAmolViewProps> = ({
     refs: AyahRef[],
     openVisual: boolean
   ) => {
+    onPrimeAudio?.();
     setLoadingId(id);
     try {
       const tracks = await buildPlaylistFromRefs(refs, selectedQari, titleBn);

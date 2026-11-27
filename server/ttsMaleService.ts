@@ -26,7 +26,23 @@ interface CachedAudioEntry {
 }
 
 const memoryCache = new Map<string, CachedAudioEntry>();
+const inFlightSynthesis = new Map<string, Promise<Uint8Array>>();
 const MAX_CACHE_ENTRIES = 300;
+
+const FALLBACK_MALE_VOICE: Record<string, string> = {
+  'bn-IN-BashkarNeural': 'bn-BD-PradeepNeural',
+  'bn-BD-PradeepNeural': 'bn-IN-BashkarNeural',
+  'ar-SA-HamedNeural': 'ar-EG-ShakirNeural',
+  'ar-EG-ShakirNeural': 'ar-SA-HamedNeural',
+  'ar-AE-HamdanNeural': 'ar-SA-HamedNeural',
+  'en-US-AndrewNeural': 'en-US-BrianNeural',
+  'en-US-BrianNeural': 'en-US-AndrewNeural',
+  'en-GB-RyanNeural': 'en-US-AndrewNeural',
+};
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function normalizeLang(rawLang: unknown): SupportedTtsLang {
   if (typeof rawLang !== 'string') return 'bn-BD';
@@ -98,35 +114,67 @@ export async function synthesizeMaleTts(req: MaleTtsRequest): Promise<Uint8Array
     return cached.buffer;
   }
 
-  const generateAudio = async (): Promise<Uint8Array> => {
-    const tts = new EdgeTTS();
-    const res = await tts.generate(cleanedText, voice, {
-      rate,
-      pitch,
-      volume: '+0%',
-      outputFormat: Constants.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
-      timeout: 15000,
-    });
-    return res.audio;
-  };
-
-  let audioBytes: Uint8Array;
-  try {
-    audioBytes = await generateAudio();
-  } catch {
-    audioBytes = await generateAudio();
+  const existingInFlight = inFlightSynthesis.get(cacheKey);
+  if (existingInFlight) {
+    return existingInFlight;
   }
 
-  if (memoryCache.size >= MAX_CACHE_ENTRIES) {
-    const oldestKey = memoryCache.keys().next().value;
-    if (oldestKey) {
-      memoryCache.delete(oldestKey);
+  const runTask = (async (): Promise<Uint8Array> => {
+    const generateWithVoice = async (targetVoice: string): Promise<Uint8Array> => {
+      const tts = new EdgeTTS();
+      const res = await tts.generate(cleanedText, targetVoice, {
+        rate,
+        pitch,
+        volume: '+0%',
+        outputFormat: Constants.OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
+        timeout: 18000,
+      });
+      if (!res?.audio || res.audio.length === 0) {
+        throw new Error('Empty audio buffer from EdgeTTS');
+      }
+      return res.audio;
+    };
+
+    const altVoice = FALLBACK_MALE_VOICE[voice] || DEFAULT_MALE_VOICE_BY_LANG[lang];
+    const attempts = [voice, voice, altVoice];
+    let lastError: unknown = null;
+    let audioBytes: Uint8Array | null = null;
+
+    for (let i = 0; i < attempts.length; i += 1) {
+      try {
+        audioBytes = await generateWithVoice(attempts[i]);
+        break;
+      } catch (err) {
+        lastError = err;
+        if (i < attempts.length - 1) {
+          await sleepMs(180 * (i + 1));
+        }
+      }
     }
-  }
-  memoryCache.set(cacheKey, {
-    buffer: audioBytes,
-    createdAt: Date.now(),
-  });
 
-  return audioBytes;
+    if (!audioBytes) {
+      console.error('[TTS synthesis failed]', voice, lastError);
+      throw lastError instanceof Error ? lastError : new Error('TTS synthesis failed');
+    }
+
+    if (memoryCache.size >= MAX_CACHE_ENTRIES) {
+      const oldestKey = memoryCache.keys().next().value;
+      if (oldestKey) {
+        memoryCache.delete(oldestKey);
+      }
+    }
+    memoryCache.set(cacheKey, {
+      buffer: audioBytes,
+      createdAt: Date.now(),
+    });
+
+    return audioBytes;
+  })();
+
+  inFlightSynthesis.set(cacheKey, runTask);
+  try {
+    return await runTask;
+  } finally {
+    inFlightSynthesis.delete(cacheKey);
+  }
 }

@@ -137,6 +137,47 @@ async function startServer() {
       }
     });
 
+    // Serve a self-unregistering Service Worker kill-switch for browsers that cached
+    // an older /dev-sw.js?dev-sw (otherwise 404/HTML MIME prevents SW update & leaves stale SW active).
+    app.get('/dev-sw.js', (_req, res) => {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.status(200).send(`
+self.addEventListener('install', () => {
+  self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => k.startsWith('workbox-') || k === 'noor-male-tts-cache')
+          .map((k) => caches.delete(k))
+      );
+    } catch {}
+    try {
+      await self.registration.unregister();
+    } catch {}
+    try {
+      const clients = await self.clients.matchAll({ type: 'window' });
+      for (const client of clients) {
+        client.navigate(client.url);
+      }
+    } catch {}
+  })());
+});
+`);
+    });
+
+    app.get('/@vite-plugin-pwa/pwa-entry-point-loaded', (_req, res) => {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).send(
+        "if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {}); }"
+      );
+    });
+
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');

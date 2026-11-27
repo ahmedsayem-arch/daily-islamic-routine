@@ -53,7 +53,7 @@ export function expandBanglaIslamicHonorifics(
   let out = rawText
     // Normalize glottal/ayn curly quotes inside Bengali transliterated words
     .replace(/তা[‘’']আলা/g, 'তাআলা')
-    .replace(/(?<=[\u0980-\u09FF])[‘’'](?=[\u0980-\u09FF])/g, '')
+    .replace(/([\u0980-\u09FF])[‘’'](?=[\u0980-\u09FF])/g, '$1')
     .replace(
       /[‘’'](?=(?:আলাইহি|আয়িশা|আয়েশা|আয়িশাহ|উমার|ওমর|আলী|আব্বাস|আলক্বামাহ|আবদুল্লাহ|আব্দুল্লাহ|আনহু|আনহা|ইমরান|আমর|আতা|আত্বা))/g,
       ''
@@ -124,8 +124,8 @@ export function expandBanglaIslamicHonorifics(
     );
     // Bare "আ." only when preceded by a 2+ letter Bengali word (e.g. "মূসা আ.") to avoid matching person initials like "আ. রহিম"
     out = out.replace(
-      /(?<=[\u0980-\u09FF]{2}\s)আ\.(?=$|[\s),;।.!?\-’”"'])/g,
-      'আলাইহিস সালাম'
+      /([\u0980-\u09FF]{2}\s)আ\.(?=$|[\s),;।.!?\-’”"'])/g,
+      '$1আলাইহিস সালাম'
     );
 
     // 5. Scholars & Muhaddithun (রহ., রহঃ, রাহি., হাফি., দা.বা.)

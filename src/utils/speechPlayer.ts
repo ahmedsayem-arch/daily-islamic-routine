@@ -228,13 +228,12 @@ function normalizeTextForSpeech(
   return rawText.replace(/\s+/g, ' ').trim();
 }
 
-function splitIntoSpeakableChunks(rawText: string, maxLen = 360): string[] {
+function splitIntoSpeakableChunks(rawText: string, maxLen = 220): string[] {
   const cleaned = rawText.replace(/\s+/g, ' ').trim();
   if (!cleaned) return [];
   if (cleaned.length <= maxLen) return [cleaned];
 
-  const sentences = cleaned
-    .split(/(?<=[।.?!؟\n])\s+/)
+  const sentences = (cleaned.match(/[^।.?!؟\n]+[।.?!؟\n]*/g) || [cleaned])
     .map((s) => s.trim())
     .filter(Boolean);
 
@@ -432,6 +431,7 @@ class SpeechNarrationManager {
   private primeNeuralAudioOnGesture() {
     const audio = this.ensureNeuralAudio();
     if (!audio || this.isNeuralUnlocked) return;
+    const unlockAttempt = this.neuralPlayAttemptId;
     try {
       audio.onended = null;
       audio.onerror = null;
@@ -440,7 +440,7 @@ class SpeechNarrationManager {
       if (p && typeof p.then === 'function') {
         p.then(() => {
           this.isNeuralUnlocked = true;
-          if (this.status !== 'playing') {
+          if (this.neuralPlayAttemptId === unlockAttempt && this.status !== 'playing') {
             audio.pause();
           }
         }).catch(() => {
@@ -506,18 +506,20 @@ class SpeechNarrationManager {
     });
   }
 
-  private stopNeuralAudio() {
+  private stopNeuralAudio(clearSrc = true) {
     this.neuralPlayAttemptId += 1;
     const audio = this.neuralAudio;
     if (audio) {
       audio.onended = null;
       audio.onerror = null;
       audio.pause();
-      try {
-        audio.removeAttribute('src');
-        audio.load();
-      } catch {
-        // ignore
+      if (clearSrc) {
+        try {
+          audio.removeAttribute('src');
+          audio.load();
+        } catch {
+          // ignore
+        }
       }
     }
     this.revokeActiveObjectUrl();
@@ -653,7 +655,7 @@ class SpeechNarrationManager {
         return;
       }
       this.sessionToken += 1;
-      this.stopNeuralAudio();
+      this.stopNeuralAudio(false);
       this.cancelWebSpeech();
       this.speakCurrentChunk(this.sessionToken);
     }
@@ -804,7 +806,7 @@ class SpeechNarrationManager {
     for (const hook of this.beforeStartHooks) hook();
 
     this.sessionToken += 1;
-    this.stopNeuralAudio();
+    this.stopNeuralAudio(false);
     this.cancelWebSpeech();
     audioKeepAlive.acquire('speech');
 
@@ -820,7 +822,7 @@ class SpeechNarrationManager {
           seg.lang,
           this.voicePrefs.expandHonorifics
         );
-        const pieces = splitIntoSpeakableChunks(normalized, 360);
+        const pieces = splitIntoSpeakableChunks(normalized, 220);
         for (const piece of pieces) {
           this.flatChunks.push({
             trackIndex: idx,
@@ -861,13 +863,34 @@ class SpeechNarrationManager {
     );
   }
 
+  private isValidAudioCacheResponse(res: Response | undefined | null): res is Response {
+    if (!res || !res.ok || res.type === 'opaque') return false;
+    if (res.url && res.url.includes('__cookie_check')) return false;
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    return (
+      ctype.includes('audio') ||
+      ctype.includes('mpeg') ||
+      ctype.includes('mp3') ||
+      ctype.includes('octet-stream')
+    );
+  }
+
   private async readCachedMaleTtsBlob(url: string): Promise<Blob | null> {
     try {
       if (typeof caches !== 'undefined') {
         const cache = await caches.open(MALE_TTS_CACHE_NAME);
-        const cached = (await cache.match(url)) || (await caches.match(url));
-        if (cached && cached.ok && cached.type !== 'opaque') {
-          const blob = await cached.blob();
+        const direct = await cache.match(url);
+        if (direct) {
+          if (this.isValidAudioCacheResponse(direct)) {
+            const blob = await direct.blob();
+            if (blob.size > 0) return blob;
+          } else {
+            await cache.delete(url).catch(() => {});
+          }
+        }
+        const anyCached = await caches.match(url);
+        if (this.isValidAudioCacheResponse(anyCached)) {
+          const blob = await anyCached.blob();
           if (blob.size > 0) return blob;
         }
       }
@@ -880,7 +903,8 @@ class SpeechNarrationManager {
   private async fetchAndCacheMaleTtsBlob(
     url: string,
     signal?: AbortSignal,
-    cacheOnly = false
+    cacheOnly = false,
+    chunkMeta?: { text: string; lang: SpeechLangCode }
   ): Promise<Blob | null> {
     const cachedBlob = await this.readCachedMaleTtsBlob(url);
     if (cachedBlob) return cachedBlob;
@@ -892,10 +916,44 @@ class SpeechNarrationManager {
       return null;
     }
 
-    const response = await fetch(url, { signal });
-    if (!response.ok) return null;
-    const ctype = response.headers.get('content-type') || '';
-    if (!ctype.includes('audio')) return null;
+    let response: Response | null = null;
+    if (url.length <= 1900) {
+      try {
+        const res = await fetch(url, { signal, credentials: 'same-origin' });
+        if (this.isValidAudioCacheResponse(res)) {
+          response = res;
+        }
+      } catch {
+        // fall through to POST /api/tts fallback
+      }
+    }
+
+    if (!response && chunkMeta) {
+      try {
+        const voice = resolveNeuralVoiceName(chunkMeta.lang, this.voicePrefs);
+        const postRes = await fetch('/api/tts', {
+          method: 'POST',
+          signal,
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: chunkMeta.text,
+            lang: chunkMeta.lang,
+            voice,
+            rate: this.voicePrefs.rate.toFixed(2),
+            pitch: this.voicePrefs.pitch.toFixed(2),
+            expandHonorifics: this.voicePrefs.expandHonorifics,
+          }),
+        });
+        if (this.isValidAudioCacheResponse(postRes)) {
+          response = postRes;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!response) return null;
 
     try {
       if (typeof caches !== 'undefined') {
@@ -1043,7 +1101,12 @@ class SpeechNarrationManager {
         // Synchronous <audio> transition without async fetch gap preserves screen-off MediaSession
         if (typeof navigator === 'undefined' || navigator.onLine !== false) {
           const directUrl = buildMaleTtsApiUrl(chunk, this.voicePrefs);
-          this.playNeuralSourceSync(audio, chunk, directUrl, false, token);
+          if (directUrl.length <= 1900) {
+            this.playNeuralSourceSync(audio, chunk, directUrl, false, token);
+            return;
+          }
+          this.primeNeuralAudioOnGesture();
+          void this.playOfflineCachedChunk(audio, chunk, token, false);
           return;
         }
 
@@ -1064,8 +1127,9 @@ class SpeechNarrationManager {
     if (token !== this.sessionToken || this.status !== 'playing') return;
 
     if (!isObjectUrl) {
-      // Direct URL failed (offline / transient network / server hiccup): try CacheStorage first!
-      void this.playOfflineCachedChunk(audio, chunk, token, true);
+      // Direct URL failed (offline / iframe cookie / transient network): recover via CacheStorage or same-origin fetch -> blob: URL
+      const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+      void this.playOfflineCachedChunk(audio, chunk, token, !isOnline);
       return;
     }
 
@@ -1099,6 +1163,7 @@ class SpeechNarrationManager {
     }
 
     const attemptId = ++this.neuralPlayAttemptId;
+    let settledFailure = false;
     this.revokeActiveObjectUrl();
     if (isObjectUrl) {
       this.activeObjectUrl = srcUrl;
@@ -1118,7 +1183,8 @@ class SpeechNarrationManager {
     };
 
     audio.onerror = () => {
-      if (attemptId !== this.neuralPlayAttemptId) return;
+      if (attemptId !== this.neuralPlayAttemptId || settledFailure) return;
+      settledFailure = true;
       this.handleNeuralFailure(audio, chunk, isObjectUrl, token);
     };
 
@@ -1135,9 +1201,19 @@ class SpeechNarrationManager {
         }
       })
       .catch((err: unknown) => {
-        if (attemptId !== this.neuralPlayAttemptId) return;
+        if (attemptId !== this.neuralPlayAttemptId || settledFailure) return;
         const name = err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
         if (name === 'AbortError') return;
+        settledFailure = true;
+        if (name === 'NotAllowedError') {
+          this.isNeuralUnlocked = false;
+          audioKeepAlive.release('speech');
+          this.status = 'paused';
+          this.noticeBn = 'অডিও চালু করতে আবার প্লে বাটনে ট্যাপ করুন।';
+          setMediaSessionPlaybackState('paused');
+          this.emit();
+          return;
+        }
         this.handleNeuralFailure(audio, chunk, isObjectUrl, token);
       });
   }
@@ -1151,7 +1227,10 @@ class SpeechNarrationManager {
     if (token !== this.sessionToken) return;
     try {
       const url = buildMaleTtsApiUrl(chunk, this.voicePrefs);
-      const blob = await this.fetchAndCacheMaleTtsBlob(url, undefined, cacheOnly);
+      const blob = await this.fetchAndCacheMaleTtsBlob(url, undefined, cacheOnly, {
+        text: chunk.text,
+        lang: chunk.lang,
+      });
       if (token !== this.sessionToken || this.status !== 'playing') return;
       if (blob && blob.size > 0) {
         const objUrl = URL.createObjectURL(blob);
@@ -1331,7 +1410,7 @@ export function useSpeechPlayer(): SpeechPlayerSnapshot {
 export function buildBanglaSpeechChunksForAyah(rawText: string): string[] {
   const prefs = speechPlayer.getVoicePrefs();
   const normalized = expandBanglaIslamicHonorifics(rawText, prefs.expandHonorifics);
-  return splitIntoSpeakableChunks(normalized, 360);
+  return splitIntoSpeakableChunks(normalized, 220);
 }
 
 export function buildBanglaMaleTtsUrlForText(chunkText: string): string {
