@@ -30,9 +30,29 @@ async function startServer() {
         expandHonorifics: req.query.expand === '0' ? false : true,
       });
 
+      const buf = Buffer.from(audio);
       res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Cache-Control', 'public, max-age=2592000, stale-while-revalidate=86400');
-      res.status(200).send(Buffer.from(audio));
+
+      const rangeHeader = typeof req.headers.range === 'string' ? req.headers.range : '';
+      const rangeMatch = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+      if (rangeMatch && buf.length > 0) {
+        const start = rangeMatch[1] ? Number.parseInt(rangeMatch[1], 10) : 0;
+        const endRaw = rangeMatch[2] ? Number.parseInt(rangeMatch[2], 10) : buf.length - 1;
+        const safeStart = Number.isFinite(start) ? Math.max(0, start) : 0;
+        const safeEnd = Number.isFinite(endRaw) ? Math.min(buf.length - 1, endRaw) : buf.length - 1;
+        if (safeStart <= safeEnd && safeStart < buf.length) {
+          const chunk = buf.subarray(safeStart, safeEnd + 1);
+          res.setHeader('Content-Range', `bytes ${safeStart}-${safeEnd}/${buf.length}`);
+          res.setHeader('Content-Length', String(chunk.length));
+          res.status(206).send(chunk);
+          return;
+        }
+      }
+
+      res.setHeader('Content-Length', String(buf.length));
+      res.status(200).send(buf);
     } catch (err) {
       res.status(502).json({
         error: err instanceof Error ? err.message : 'TTS synthesis failed',

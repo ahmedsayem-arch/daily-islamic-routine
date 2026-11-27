@@ -397,23 +397,11 @@ class SpeechNarrationManager {
   private sessionToken = 0;
   private neuralPlayAttemptId = 0;
   private voicePrefs: SpeechVoicePrefs = loadVoicePrefs();
-  private neuralAudioA: HTMLAudioElement | null = null;
-  private neuralAudioB: HTMLAudioElement | null = null;
-  private activeSlot: 'A' | 'B' = 'A';
-  private unlockedSlots = { A: false, B: false };
-  private slotObjectUrls: { A: string | null; B: string | null } = {
-    A: null,
-    B: null,
-  };
-  private preloadedStandby: {
-    slot: 'A' | 'B';
-    cursor: number;
-    objUrl: string;
-    token: number;
-  } | null = null;
+  private neuralAudio: HTMLAudioElement | null = null;
+  private isNeuralUnlocked = false;
+  private activeObjectUrl: string | null = null;
   private prefetchedChunks = new Map<number, { objUrl: string; token: number }>();
   private prefetchingCursors = new Set<number>();
-  private activeFetchController: AbortController | null = null;
   private activeUtterance: SpeechSynthesisUtterance | null = null;
   private deviceVoicesCount = 0;
 
@@ -427,55 +415,38 @@ class SpeechNarrationManager {
     }
   }
 
-  private createNeuralAudioElement(): HTMLAudioElement | null {
+  private ensureNeuralAudio(): HTMLAudioElement | null {
     if (typeof window === 'undefined' || typeof Audio === 'undefined') return null;
-    const audio = new Audio();
-    audio.preload = 'auto';
-    audio.setAttribute('playsinline', 'true');
-    audio.setAttribute('webkit-playsinline', 'true');
-    return audio;
-  }
-
-  private ensureNeuralSlot(slot: 'A' | 'B'): HTMLAudioElement | null {
-    if (slot === 'A') {
-      if (!this.neuralAudioA) this.neuralAudioA = this.createNeuralAudioElement();
-      return this.neuralAudioA;
+    if (!this.neuralAudio) {
+      const audio = new Audio();
+      audio.preload = 'auto';
+      audio.setAttribute('playsinline', 'true');
+      audio.setAttribute('webkit-playsinline', 'true');
+      this.neuralAudio = audio;
     }
-    if (!this.neuralAudioB) this.neuralAudioB = this.createNeuralAudioElement();
-    return this.neuralAudioB;
-  }
-
-  private getActiveNeuralAudio(): HTMLAudioElement | null {
-    return this.ensureNeuralSlot(this.activeSlot);
-  }
-
-  private getStandbySlot(): 'A' | 'B' {
-    return this.activeSlot === 'A' ? 'B' : 'A';
+    return this.neuralAudio;
   }
 
   private primeNeuralAudioOnGesture() {
-    for (const slot of ['A', 'B'] as const) {
-      if (this.unlockedSlots[slot]) continue;
-      const audio = this.ensureNeuralSlot(slot);
-      if (!audio) continue;
-      try {
-        audio.onended = null;
-        audio.onerror = null;
-        audio.src = SILENT_WAV_DATA_URI;
-        const p = audio.play();
-        if (p && typeof p.then === 'function') {
-          p.then(() => {
-            this.unlockedSlots[slot] = true;
-            if (slot !== this.activeSlot) {
-              audio.pause();
-            }
-          }).catch(() => {
-            // ignore silent unlock rejection
-          });
-        }
-      } catch {
-        // ignore
+    const audio = this.ensureNeuralAudio();
+    if (!audio || this.isNeuralUnlocked) return;
+    try {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.src = SILENT_WAV_DATA_URI;
+      const p = audio.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          this.isNeuralUnlocked = true;
+          if (this.status !== 'playing') {
+            audio.pause();
+          }
+        }).catch(() => {
+          // ignore silent unlock rejection
+        });
       }
+    } catch {
+      // ignore
     }
   }
 
@@ -488,22 +459,18 @@ class SpeechNarrationManager {
     audioKeepAlive.acquire('speech');
   }
 
-  private revokeSlotObjectUrl(slot: 'A' | 'B') {
-    const url = this.slotObjectUrls[slot];
-    if (url) {
+  private revokeActiveObjectUrl() {
+    if (this.activeObjectUrl) {
       try {
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(this.activeObjectUrl);
       } catch {
         // ignore
       }
-      this.slotObjectUrls[slot] = null;
+      this.activeObjectUrl = null;
     }
   }
 
   private clearPrefetchedChunks() {
-    if (this.preloadedStandby) {
-      this.preloadedStandby = null;
-    }
     for (const entry of this.prefetchedChunks.values()) {
       try {
         URL.revokeObjectURL(entry.objUrl);
@@ -538,25 +505,19 @@ class SpeechNarrationManager {
 
   private stopNeuralAudio() {
     this.neuralPlayAttemptId += 1;
-    if (this.activeFetchController) {
-      this.activeFetchController.abort();
-      this.activeFetchController = null;
-    }
-    for (const slot of ['A', 'B'] as const) {
-      const el = slot === 'A' ? this.neuralAudioA : this.neuralAudioB;
-      if (el) {
-        el.onended = null;
-        el.onerror = null;
-        el.pause();
-        try {
-          el.removeAttribute('src');
-          el.load();
-        } catch {
-          // ignore
-        }
+    const audio = this.neuralAudio;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      try {
+        audio.removeAttribute('src');
+        audio.load();
+      } catch {
+        // ignore
       }
-      this.revokeSlotObjectUrl(slot);
     }
+    this.revokeActiveObjectUrl();
     this.clearPrefetchedChunks();
   }
 
@@ -897,7 +858,7 @@ class SpeechNarrationManager {
     try {
       if (typeof caches !== 'undefined') {
         const cache = await caches.open(MALE_TTS_CACHE_NAME);
-        const cached = await cache.match(url);
+        const cached = (await cache.match(url)) || (await caches.match(url));
         if (cached) {
           return await cached.blob();
         }
@@ -927,50 +888,7 @@ class SpeechNarrationManager {
     return await response.blob();
   }
 
-  private preloadNextChunkIntoStandby(token: number) {
-    let nextCursor = this.chunkCursor + 1;
-    while (
-      nextCursor < this.flatChunks.length &&
-      this.flatChunks[nextCursor].lang === 'ar-SA' &&
-      this.voicePrefs.arabicMode === 'skip'
-    ) {
-      nextCursor += 1;
-    }
-    if (nextCursor >= this.flatChunks.length) return;
-    const ready = this.prefetchedChunks.get(nextCursor);
-    if (!ready || ready.token !== token) return;
-    if (
-      this.preloadedStandby &&
-      this.preloadedStandby.cursor === nextCursor &&
-      this.preloadedStandby.token === token
-    ) {
-      return;
-    }
-
-    const standbySlot = this.getStandbySlot();
-    const standbyEl = this.ensureNeuralSlot(standbySlot);
-    if (!standbyEl) return;
-
-    this.prefetchedChunks.delete(nextCursor);
-    this.revokeSlotObjectUrl(standbySlot);
-    this.slotObjectUrls[standbySlot] = ready.objUrl;
-    standbyEl.onended = null;
-    standbyEl.onerror = null;
-    standbyEl.src = ready.objUrl;
-    try {
-      standbyEl.load();
-    } catch {
-      // ignore
-    }
-    this.preloadedStandby = {
-      slot: standbySlot,
-      cursor: nextCursor,
-      objUrl: ready.objUrl,
-      token,
-    };
-  }
-
-  private prefetchUpcomingNeuralChunks(token: number, count = 3) {
+  private prefetchUpcomingNeuralChunks(token: number, count = 6) {
     let cursor = this.chunkCursor + 1;
     let queued = 0;
     while (cursor < this.flatChunks.length && queued < count) {
@@ -984,19 +902,8 @@ class SpeechNarrationManager {
         continue;
       }
       queued += 1;
-      if (
-        this.preloadedStandby &&
-        this.preloadedStandby.cursor === cursor &&
-        this.preloadedStandby.token === token
-      ) {
-        cursor += 1;
-        continue;
-      }
       const existing = this.prefetchedChunks.get(cursor);
       if (existing && existing.token === token) {
-        if (queued === 1) {
-          this.preloadNextChunkIntoStandby(token);
-        }
         cursor += 1;
         continue;
       }
@@ -1005,7 +912,6 @@ class SpeechNarrationManager {
         continue;
       }
       const targetCursor = cursor;
-      const isImmediateNext = queued === 1;
       this.prefetchingCursors.add(targetCursor);
       const nextUrl = buildMaleTtsApiUrl(candidate, this.voicePrefs);
       void this.fetchAndCacheMaleTtsBlob(nextUrl)
@@ -1023,9 +929,6 @@ class SpeechNarrationManager {
             objUrl: URL.createObjectURL(blob),
             token,
           });
-          if (isImmediateNext && this.status === 'playing') {
-            this.preloadNextChunkIntoStandby(token);
-          }
         })
         .catch(() => {
           // Silent prefetch failure is harmless
@@ -1056,42 +959,28 @@ class SpeechNarrationManager {
 
     const chunk = this.flatChunks[this.chunkCursor];
     this.currentTrackIndex = chunk.trackIndex;
+    audioKeepAlive.pulse();
     this.syncMediaSession();
     this.emit();
 
     if (this.shouldUseNeuralServerForChunk(chunk)) {
-      if (
-        this.preloadedStandby &&
-        this.preloadedStandby.cursor === this.chunkCursor &&
-        this.preloadedStandby.token === token
-      ) {
-        const pre = this.preloadedStandby;
-        this.preloadedStandby = null;
-        this.activeSlot = pre.slot;
-        const standbyAudio = this.ensureNeuralSlot(pre.slot);
-        if (standbyAudio) {
-          this.playNeuralObjectUrlSync(standbyAudio, pre.slot, chunk, pre.objUrl, token, true);
-          return;
-        }
-      }
-
-      const audio = this.getActiveNeuralAudio();
+      const audio = this.ensureNeuralAudio();
       if (audio) {
         const prefetched = this.prefetchedChunks.get(this.chunkCursor);
         if (prefetched && prefetched.token === token) {
           this.prefetchedChunks.delete(this.chunkCursor);
-          this.playNeuralObjectUrlSync(
-            audio,
-            this.activeSlot,
-            chunk,
-            prefetched.objUrl,
-            token,
-            false
-          );
+          this.playNeuralSourceSync(audio, chunk, prefetched.objUrl, true, token);
           return;
         }
-        void this.speakViaMaleNeuralApi(audio, this.activeSlot, chunk, token);
-        this.prefetchUpcomingNeuralChunks(token, 3);
+
+        // Synchronous <audio> transition without async fetch gap preserves screen-off MediaSession
+        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+          const directUrl = buildMaleTtsApiUrl(chunk, this.voicePrefs);
+          this.playNeuralSourceSync(audio, chunk, directUrl, false, token);
+          return;
+        }
+
+        void this.playOfflineCachedChunk(audio, chunk, token);
         return;
       }
     }
@@ -1099,18 +988,17 @@ class SpeechNarrationManager {
     this.speakViaWebSpeech(chunk, token);
   }
 
-  private playNeuralObjectUrlSync(
+  private playNeuralSourceSync(
     audio: HTMLAudioElement,
-    slot: 'A' | 'B',
     chunk: FlatChunk,
-    objUrl: string,
-    token: number,
-    alreadyLoadedOnElement: boolean
+    srcUrl: string,
+    isObjectUrl: boolean,
+    token: number
   ) {
     if (token !== this.sessionToken || this.status !== 'playing') {
-      if (!alreadyLoadedOnElement) {
+      if (isObjectUrl) {
         try {
-          URL.revokeObjectURL(objUrl);
+          URL.revokeObjectURL(srcUrl);
         } catch {
           // ignore
         }
@@ -1119,11 +1007,11 @@ class SpeechNarrationManager {
     }
 
     const attemptId = ++this.neuralPlayAttemptId;
-    if (!alreadyLoadedOnElement) {
-      this.revokeSlotObjectUrl(slot);
-      this.slotObjectUrls[slot] = objUrl;
-      audio.src = objUrl;
+    this.revokeActiveObjectUrl();
+    if (isObjectUrl) {
+      this.activeObjectUrl = srcUrl;
     }
+    audio.src = srcUrl;
 
     audio.onended = () => {
       if (
@@ -1145,19 +1033,27 @@ class SpeechNarrationManager {
       ) {
         return;
       }
+      const isHidden =
+        typeof document !== 'undefined' && document.visibilityState === 'hidden';
+      if (isHidden) {
+        // Never fall back to Web Speech while screen is locked (OS blocks speechSynthesis); skip to next chunk synchronously
+        this.chunkCursor += 1;
+        this.speakCurrentChunk(token);
+        return;
+      }
       this.speakViaWebSpeech(chunk, token);
     };
 
     audio
       .play()
       .then(() => {
-        this.unlockedSlots[slot] = true;
+        this.isNeuralUnlocked = true;
         if (
           attemptId === this.neuralPlayAttemptId &&
           token === this.sessionToken &&
           this.status === 'playing'
         ) {
-          this.prefetchUpcomingNeuralChunks(token, 3);
+          this.prefetchUpcomingNeuralChunks(token, 6);
         }
       })
       .catch((err: unknown) => {
@@ -1165,45 +1061,37 @@ class SpeechNarrationManager {
         const name = err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
         if (name === 'AbortError') return;
         if (token === this.sessionToken && this.status === 'playing') {
-          this.speakViaWebSpeech(chunk, token);
+          const isHidden =
+            typeof document !== 'undefined' && document.visibilityState === 'hidden';
+          if (isHidden) {
+            this.chunkCursor += 1;
+            this.speakCurrentChunk(token);
+          } else {
+            this.speakViaWebSpeech(chunk, token);
+          }
         }
       });
   }
 
-  private async speakViaMaleNeuralApi(
+  private async playOfflineCachedChunk(
     audio: HTMLAudioElement,
-    slot: 'A' | 'B',
     chunk: FlatChunk,
     token: number
   ) {
     if (token !== this.sessionToken) return;
-
-    if (this.activeFetchController) {
-      this.activeFetchController.abort();
-    }
-    const controller = new AbortController();
-    this.activeFetchController = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 18000);
-
     try {
       const url = buildMaleTtsApiUrl(chunk, this.voicePrefs);
-      let blob = await this.fetchAndCacheMaleTtsBlob(url, controller.signal);
-      if ((!blob || blob.size === 0) && typeof navigator !== 'undefined' && navigator.onLine !== false) {
-        blob = await this.fetchAndCacheMaleTtsBlob(url, controller.signal);
-      }
-      window.clearTimeout(timeoutId);
-
+      const blob = await this.fetchAndCacheMaleTtsBlob(url);
       if (token !== this.sessionToken || this.status !== 'playing') return;
-      if (!blob || blob.size === 0) {
-        this.speakViaWebSpeech(chunk, token);
+      if (blob && blob.size > 0) {
+        const objUrl = URL.createObjectURL(blob);
+        this.playNeuralSourceSync(audio, chunk, objUrl, true, token);
         return;
       }
-
-      const objUrl = URL.createObjectURL(blob);
-      this.playNeuralObjectUrlSync(audio, slot, chunk, objUrl, token, false);
     } catch {
-      window.clearTimeout(timeoutId);
-      if (token !== this.sessionToken || this.status !== 'playing') return;
+      // fall through
+    }
+    if (token === this.sessionToken && this.status === 'playing') {
       this.speakViaWebSpeech(chunk, token);
     }
   }

@@ -65,6 +65,12 @@ class BackgroundAudioKeepAlive {
     this.ensureRunning();
   }
 
+  pulse() {
+    if (this.activeOwners.size > 0) {
+      this.ensureRunning();
+    }
+  }
+
   release(owner: 'quran' | 'speech') {
     this.activeOwners.delete(owner);
     if (

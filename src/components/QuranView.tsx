@@ -379,7 +379,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
       if (active) {
         setOfflineSavedCount(cnt);
         if (cnt > 0) {
-          prewarmUpcomingAudioUrls(ayahs.slice(0, 3).map((a) => a.audioUrl));
+          prewarmUpcomingAudioUrls(ayahs.slice(0, 12).map((a) => a.audioUrl));
         }
       }
     });
@@ -412,25 +412,58 @@ export const QuranView: React.FC<QuranViewProps> = ({
     };
   }, [readerOpen, settings.showTafsir, selectedSurahNum, activeTafsirEdition, tafsirReloadTick]);
 
+  const scrollFollowTimerRef = useRef<number | null>(null);
+
   const scrollElementSmoothToTop = (el: HTMLElement | null) => {
     if (!el || typeof window === 'undefined') return;
-    const rect = el.getBoundingClientRect();
-    const targetTop = Math.max(0, window.scrollY + rect.top - 76);
     try {
-      window.scrollTo({ top: targetTop, behavior: 'smooth' });
-    } catch {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch {
+      const rect = el.getBoundingClientRect();
+      const targetTop = Math.max(0, window.scrollY + rect.top - 76);
+      window.scrollTo({ top: targetTop, behavior: 'smooth' });
     }
   };
 
   const scrollAyahToTop = (trackId: string) => {
     if (typeof window === 'undefined') return;
+    if (scrollFollowTimerRef.current !== null) {
+      window.clearTimeout(scrollFollowTimerRef.current);
+      scrollFollowTimerRef.current = null;
+    }
+    const alignElement = () => {
+      const el =
+        trackId === `${selectedSurahNum}:0`
+          ? bismillahBannerRef.current
+          : ayahElementRefs.current.get(trackId) || null;
+      if (!el) return;
+      scrollElementSmoothToTop(el);
+    };
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        scrollElementSmoothToTop(ayahElementRefs.current.get(trackId) || null);
-      });
+      requestAnimationFrame(alignElement);
     });
+    // Second pass catches post-SmoothStage transition / Tafsir expand layout shifts
+    scrollFollowTimerRef.current = window.setTimeout(() => {
+      scrollFollowTimerRef.current = null;
+      const el =
+        trackId === `${selectedSurahNum}:0`
+          ? bismillahBannerRef.current
+          : ayahElementRefs.current.get(trackId) || null;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.top < 56 || rect.top > 132) {
+        scrollElementSmoothToTop(el);
+      }
+    }, 300);
   };
+
+  useEffect(() => {
+    return () => {
+      if (scrollFollowTimerRef.current !== null) {
+        window.clearTimeout(scrollFollowTimerRef.current);
+      }
+    };
+  }, []);
 
   const toggleTafsirExpand = (trackId: string, expandKey: string, forceValue?: boolean) => {
     setExpandedTafsirKeys((prev) => ({
@@ -440,27 +473,28 @@ export const QuranView: React.FC<QuranViewProps> = ({
     scrollAyahToTop(trackId);
   };
 
-  // Keep the currently reciting Ayah (or active Tafsir audio Ayah) scrolled smoothly
+  // Keep the currently reciting Ayah (Arabic, Bangla translation, or Tafsir audio) scrolled cleanly to top
   useEffect(() => {
-    if (!autoFollowAyah || loading) return;
-    const tafsirActiveTrackKey =
-      speechSnap.status === 'playing' &&
-      speechSnap.currentTrack?.id.startsWith(`tafsir-${activeTafsirEdition}-`)
-        ? speechSnap.currentTrack.id.replace(`tafsir-${activeTafsirEdition}-`, '')
+    if (!readerOpen || viewMode !== 'surah' || !autoFollowAyah || loading) return;
+    const tafsirMatch =
+      speechSnap.status === 'playing'
+        ? speechSnap.currentTrack?.id.match(/^tafsir-[^-]+-(\d+:\d+)$/)
         : null;
-    const quranPlayingKey = isPlaying ? activeTrackKey : null;
+    const tafsirActiveTrackKey =
+      tafsirMatch && tafsirMatch[1].startsWith(`${selectedSurahNum}:`)
+        ? tafsirMatch[1]
+        : null;
+    const quranPlayingKey =
+      isPlaying && activeTrackKey?.startsWith(`${selectedSurahNum}:`)
+        ? activeTrackKey
+        : null;
     const targetKey = tafsirActiveTrackKey || quranPlayingKey;
     if (!targetKey) return;
 
-    if (targetKey === `${selectedSurahNum}:0`) {
-      requestAnimationFrame(() => {
-        scrollElementSmoothToTop(bismillahBannerRef.current);
-      });
-      return;
-    }
-
     scrollAyahToTop(targetKey);
   }, [
+    readerOpen,
+    viewMode,
     activeTrackKey,
     activeTrackId,
     isPlaying,
@@ -470,7 +504,6 @@ export const QuranView: React.FC<QuranViewProps> = ({
     readerStyle,
     speechSnap.status,
     speechSnap.currentTrack,
-    activeTafsirEdition,
     selectedSurahNum,
   ]);
 
@@ -560,7 +593,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
       }
     }
 
-    const slice = ayahs.slice(startIdx, Math.min(ayahs.length, startIdx + 8));
+    const slice = ayahs.slice(startIdx);
     const queue = slice
       .map((a) => {
         const raw = currentMap[a.numberInSurah];
@@ -577,6 +610,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
 
     if (queue.length > 0) {
       speechPlayer.playQueue(queue, 0);
+      scrollAyahToTop(`${selectedSurahNum}:${targetAyah.numberInSurah}`);
     }
   };
 
@@ -673,6 +707,8 @@ export const QuranView: React.FC<QuranViewProps> = ({
 
     if (tracks.length > 0) {
       onPlayPlaylist(tracks, targetPlayIndex, false);
+      const startAyahNum = ayahs[startIndex]?.numberInSurah || 1;
+      scrollAyahToTop(`${selectedSurahNum}:${startAyahNum}`);
     }
   };
 
@@ -1945,6 +1981,11 @@ export const QuranView: React.FC<QuranViewProps> = ({
                   {ayahs.map((ayah, idx) => {
                     const trackId = `${selectedSurahNum}:${ayah.numberInSurah}`;
                     const isThisTrack = activeTrackKey === trackId;
+                    const tafsirTrackId = `tafsir-${activeTafsirEdition}-${trackId}`;
+                    const isThisTafsirActive =
+                      speechSnap.currentTrack?.id === tafsirTrackId &&
+                      speechSnap.status !== 'idle';
+                    const isThisAyahActive = isThisTrack || isThisTafsirActive;
                     return (
                       <span
                         key={ayah.numberInSurah}
@@ -1968,7 +2009,7 @@ export const QuranView: React.FC<QuranViewProps> = ({
                           }
                         }}
                         className={`scroll-mt-24 inline cursor-pointer rounded-lg px-1 transition-all duration-300 ${
-                          isThisTrack
+                          isThisAyahActive
                             ? 'bg-[#0D6E52]/12 text-[#063D34] ring-1 ring-[#0D6E52]/20 dark:bg-[#D4A853]/20 dark:text-[#F6DC9B] dark:ring-[#E7C57B]/25'
                             : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.05]'
                         }`}
@@ -1992,6 +2033,28 @@ export const QuranView: React.FC<QuranViewProps> = ({
                   {ayahs.map((ayah, idx) => {
                     const trackId = `${selectedSurahNum}:${ayah.numberInSurah}`;
                     const isThisTrack = activeTrackKey === trackId;
+                    const tafsirTrackId = `tafsir-${activeTafsirEdition}-${trackId}`;
+                    const isThisTafsirActive =
+                      speechSnap.currentTrack?.id === tafsirTrackId &&
+                      speechSnap.status !== 'idle';
+                    const isThisTafsirPlaying =
+                      isThisTafsirActive && speechSnap.status === 'playing';
+                    const isThisAyahActive = isThisTrack || isThisTafsirActive;
+                    const isThisAyahPlaying =
+                      (isThisTrack && isPlaying) || isThisTafsirPlaying;
+                    const activePhaseLabel = isThisTafsirActive
+                      ? isThisTafsirPlaying
+                        ? 'তাফসীর চলছে'
+                        : 'তাফসীর বিরতি'
+                      : isThisTrack
+                      ? activeTrackId?.startsWith('bntran-bn-')
+                        ? isPlaying
+                          ? 'বাংলা অনুবাদ চলছে'
+                          : 'বাংলা অনুবাদ বিরতি'
+                        : isPlaying
+                        ? 'তিলাওয়াত চলছে'
+                        : 'বিরতি'
+                      : null;
                     const favEntry = favoriteMap.get(trackId);
                     const isFavorited = Boolean(favEntry);
 
@@ -2016,17 +2079,17 @@ export const QuranView: React.FC<QuranViewProps> = ({
                           else ayahElementRefs.current.delete(trackId);
                         }}
                         className={`scroll-mt-20 py-5 transition-all duration-300 ${
-                          isThisTrack
-                            ? 'rounded-2xl border-l-4 border-l-[#0D6E52] bg-[#0D6E52]/[0.05] px-4 ring-1 ring-[#0D6E52]/12 dark:border-l-[#E7C57B] dark:bg-[#0D6E52]/15 dark:ring-[#E7C57B]/20'
+                          isThisAyahActive
+                            ? 'rounded-2xl border-l-4 border-l-[#0D6E52] bg-[#0D6E52]/[0.06] px-4 ring-1 ring-[#0D6E52]/18 dark:border-l-[#E7C57B] dark:bg-[#0D6E52]/18 dark:ring-[#E7C57B]/25'
                             : ''
                         }`}
                       >
                         <div className="mb-3 flex items-center justify-between gap-2">
                           <span className="font-mono-num inline-flex items-center gap-2 text-xs font-bold text-[#0D6E52] dark:text-[#E7C57B]">
-                            {isThisTrack && (
+                            {isThisAyahActive && (
                               <span
-                                className={`h-2 w-2 rounded-full ${
-                                  isPlaying
+                                className={`h-2.5 w-2.5 rounded-full ${
+                                  isThisAyahPlaying
                                     ? 'animate-pulse bg-[#0D6E52] dark:bg-[#6EE7B7]'
                                     : 'bg-[#D4A853]'
                                 }`}
@@ -2035,6 +2098,11 @@ export const QuranView: React.FC<QuranViewProps> = ({
                             <span>
                               আয়াত {selectedSurahNum}:{ayah.numberInSurah}
                             </span>
+                            {activePhaseLabel && (
+                              <span className="font-sans text-[11px] font-semibold text-[#063D34] dark:text-[#6EE7B7]">
+                                · {activePhaseLabel}
+                              </span>
+                            )}
                           </span>
 
                           <div className="flex items-center gap-1">
@@ -2119,18 +2187,14 @@ export const QuranView: React.FC<QuranViewProps> = ({
                           const paragraphs = cachedClean?.paragraphs || [];
                           const tafsirExpandKey = `${activeTafsirEdition}:${trackId}`;
                           const isExpanded = Boolean(expandedTafsirKeys[tafsirExpandKey]);
-                          const tafsirTrackId = `tafsir-${activeTafsirEdition}-${trackId}`;
-                          const isThisTafsirActive =
-                            speechSnap.currentTrack?.id === tafsirTrackId &&
-                            speechSnap.status !== 'idle';
-                          const isThisTafsirPlaying =
-                            isThisTafsirActive && speechSnap.status === 'playing';
                           const previewSnippet = cachedClean?.preview || '';
 
                           return (
                             <div
                               className={`mt-3.5 rounded-2xl border p-3.5 transition-colors ${
-                                isThisTafsirActive
+                                isThisTafsirPlaying
+                                  ? 'border-[#0D6E52]/60 bg-[#0D6E52]/[0.10] ring-1 ring-[#0D6E52]/25 dark:border-[#E7C57B]/55 dark:bg-[#063D34]/70 dark:ring-[#E7C57B]/25'
+                                  : isThisTafsirActive
                                   ? 'border-[#0D6E52]/45 bg-[#0D6E52]/[0.08] dark:border-[#E7C57B]/40 dark:bg-[#063D34]/55'
                                   : 'border-[#0D6E52]/15 bg-[#0D6E52]/[0.03] dark:border-[#E7C57B]/15 dark:bg-white/[0.025]'
                               }`}

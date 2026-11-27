@@ -359,11 +359,7 @@ export default function App() {
   const [inAppAlert, setInAppAlert] = useState<InAppNotificationAlert | null>(null);
   const [isTasbihOpen, setIsTasbihOpen] = useState(false);
 
-  const audioARef = useRef<HTMLAudioElement | null>(null);
-  const audioBRef = useRef<HTMLAudioElement | null>(null);
-  const activeSlotRef = useRef<'A' | 'B'>('A');
-  const unlockedSlotsRef = useRef<{ A: boolean; B: boolean }>({ A: false, B: false });
-  const preloadedStandbyRef = useRef<{ slot: 'A' | 'B'; remoteUrl: string } | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastMediaPosSyncRef = useRef<number>(0);
   const [playlist, setPlaylist] = useState<AudioTrackItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
@@ -883,94 +879,17 @@ export default function App() {
     ruqyahReaderState,
   ]);
 
-  const getSlotEl = useCallback((slot: 'A' | 'B') => {
-    return slot === 'A' ? audioARef.current : audioBRef.current;
-  }, []);
-
   const getActiveAudio = useCallback(() => {
-    return getSlotEl(activeSlotRef.current);
-  }, [getSlotEl]);
-
-  const getStandbySlot = useCallback((): 'A' | 'B' => {
-    return activeSlotRef.current === 'A' ? 'B' : 'A';
+    return audioRef.current;
   }, []);
-
-  const unlockStandbySlotOnGesture = useCallback(() => {
-    const standbySlot = getStandbySlot();
-    if (unlockedSlotsRef.current[standbySlot]) return;
-    const standbyEl = getSlotEl(standbySlot);
-    if (!standbyEl || preloadedStandbyRef.current?.slot === standbySlot) return;
-    try {
-      standbyEl.src =
-        'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-      const p = standbyEl.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          unlockedSlotsRef.current[standbySlot] = true;
-          if (activeSlotRef.current !== standbySlot) {
-            standbyEl.pause();
-          }
-        }).catch(() => {});
-      }
-    } catch {
-      // ignore
-    }
-  }, [getSlotEl, getStandbySlot]);
-
-  const preloadNextTrackOnStandby = useCallback(
-    (curIdx: number) => {
-      const list = playlistRef.current;
-      if (list.length === 0) return;
-      const nextIdx =
-        curIdx < list.length - 1
-          ? curIdx + 1
-          : isLoopingRef.current && list.length > 0
-          ? 0
-          : -1;
-      if (nextIdx < 0) return;
-
-      const nextTrack = list[nextIdx];
-      if (!nextTrack) return;
-      const standbySlot = getStandbySlot();
-      const standbyEl = getSlotEl(standbySlot);
-      if (!standbyEl) return;
-
-      const nextFastSrc = getFastPlayableAudioUrlSync(nextTrack.audioUrl);
-      if (
-        preloadedStandbyRef.current?.slot === standbySlot &&
-        preloadedStandbyRef.current.remoteUrl === nextTrack.audioUrl &&
-        standbyEl.src === nextFastSrc &&
-        !standbyEl.error
-      ) {
-        return;
-      }
-
-      try {
-        standbyEl.pause();
-        standbyEl.src = nextFastSrc;
-        standbyEl.load();
-        preloadedStandbyRef.current = {
-          slot: standbySlot,
-          remoteUrl: nextTrack.audioUrl,
-        };
-      } catch {
-        // ignore preload error
-      }
-    },
-    [getSlotEl, getStandbySlot]
-  );
 
   useEffect(() => {
     return speechPlayer.onBeforeStart(() => {
       ignorePauseEventRef.current = true;
-      for (const el of [audioARef.current, audioBRef.current]) {
-        if (el && !el.paused) {
-          el.pause();
-        }
+      const el = audioRef.current;
+      if (el && !el.paused) {
+        el.pause();
       }
-      queueMicrotask(() => {
-        ignorePauseEventRef.current = false;
-      });
       audioKeepAlive.release('quran');
       isPlayingRef.current = false;
       setIsPlaying(false);
@@ -982,22 +901,19 @@ export default function App() {
 
   const startTrackOnAudioElement = useCallback(
     (track: AudioTrackItem, idx: number, shouldPlay: boolean) => {
-      const activeSlot = activeSlotRef.current;
-      const standbySlot = activeSlot === 'A' ? 'B' : 'A';
-      const activeEl = getSlotEl(activeSlot);
-      const standbyEl = getSlotEl(standbySlot);
-      if (!activeEl) return;
+      const targetEl = audioRef.current;
+      if (!targetEl) return;
 
       const attemptId = ++playAttemptIdRef.current;
 
-      // Auto-cache next 3 small Ayah MP3s & prewarm up to 8 cached tracks in RAM
+      // Auto-cache next 6 tracks & prewarm up to 16 cached tracks in RAM as blob: URLs
       const autoFetchUrls: string[] = [];
       const prewarmUrls: string[] = [track.audioUrl];
-      for (let offset = 1; offset <= 8; offset += 1) {
+      for (let offset = 1; offset <= 16; offset += 1) {
         const nextUrl = playlistRef.current[idx + offset]?.audioUrl;
         if (!nextUrl) continue;
         prewarmUrls.push(nextUrl);
-        if (offset <= 3) autoFetchUrls.push(nextUrl);
+        if (offset <= 6) autoFetchUrls.push(nextUrl);
       }
       prewarmUpcomingAudioUrls(prewarmUrls);
       if (autoFetchUrls.length > 0) {
@@ -1007,54 +923,16 @@ export default function App() {
       const fastSrc = getFastPlayableAudioUrlSync(track.audioUrl);
       activeLoadedRemoteUrlRef.current = track.audioUrl;
 
-      let targetSlot: 'A' | 'B' = activeSlot;
-      let targetEl: HTMLAudioElement = activeEl;
+      const needsSrcUpdate =
+        targetEl.src !== fastSrc ||
+        Boolean(targetEl.error) ||
+        targetEl.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
 
-      // Use preloaded standby audio element immediately for 0ms gapless screen-off handoff
-      if (
-        standbyEl &&
-        preloadedStandbyRef.current?.slot === standbySlot &&
-        preloadedStandbyRef.current.remoteUrl === track.audioUrl &&
-        !standbyEl.error &&
-        Boolean(standbyEl.src)
-      ) {
-        activeSlotRef.current = standbySlot;
-        preloadedStandbyRef.current = null;
-        activeEl.pause();
-        targetSlot = standbySlot;
-        targetEl = standbyEl;
-
-        if (
-          fastSrc !== targetEl.src &&
-          fastSrc.startsWith('blob:') &&
-          targetEl.readyState < 2
-        ) {
-          ignorePauseEventRef.current = true;
-          targetEl.src = fastSrc;
-          queueMicrotask(() => {
-            ignorePauseEventRef.current = false;
-          });
-        }
-      } else {
-        if (standbyEl && !standbyEl.paused) {
-          standbyEl.pause();
-        }
-        preloadedStandbyRef.current = null;
-
-        const needsSrcUpdate =
-          targetEl.src !== fastSrc ||
-          Boolean(targetEl.error) ||
-          targetEl.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
-
-        if (needsSrcUpdate) {
-          ignorePauseEventRef.current = true;
-          targetEl.src = fastSrc;
-          if (targetEl.error) {
-            targetEl.load();
-          }
-          queueMicrotask(() => {
-            ignorePauseEventRef.current = false;
-          });
+      if (needsSrcUpdate) {
+        ignorePauseEventRef.current = true;
+        targetEl.src = fastSrc;
+        if (targetEl.error) {
+          targetEl.load();
         }
       }
 
@@ -1069,15 +947,12 @@ export default function App() {
           if (
             resolved !== track.audioUrl &&
             attemptId === playAttemptIdRef.current &&
-            targetEl === getActiveAudio() &&
+            targetEl === audioRef.current &&
             targetEl.error &&
             isPlayingRef.current
           ) {
             ignorePauseEventRef.current = true;
             targetEl.src = resolved;
-            queueMicrotask(() => {
-              ignorePauseEventRef.current = false;
-            });
             targetEl.play().catch(() => {});
           }
         });
@@ -1085,18 +960,19 @@ export default function App() {
 
       if (shouldPlay) {
         audioKeepAlive.acquire('quran');
+        audioKeepAlive.pulse();
         setMediaSessionPlaybackState('playing');
         setAudioStatus('loading');
         targetEl
           .play()
           .then(() => {
             if (attemptId !== playAttemptIdRef.current) return;
-            unlockedSlotsRef.current[targetSlot] = true;
+            ignorePauseEventRef.current = false;
             setAudioStatus('playing');
-            preloadNextTrackOnStandby(idx);
           })
           .catch((err: unknown) => {
             if (attemptId !== playAttemptIdRef.current) return;
+            ignorePauseEventRef.current = false;
             const errName =
               err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
             if (errName === 'AbortError') return;
@@ -1107,9 +983,11 @@ export default function App() {
             setMediaSessionPlaybackState('paused');
             setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
           });
+      } else {
+        ignorePauseEventRef.current = false;
       }
     },
-    [getActiveAudio, getSlotEl, preloadNextTrackOnStandby]
+    []
   );
 
   useEffect(() => {
@@ -1133,164 +1011,142 @@ export default function App() {
   }, [currentTrack, currentIndex, getActiveAudio, startTrackOnAudioElement]);
 
   useEffect(() => {
-    const elA = audioARef.current;
-    const elB = audioBRef.current;
-    const elements = [elA, elB].filter((el): el is HTMLAudioElement => Boolean(el));
-    if (elements.length === 0) return;
+    const audio = audioRef.current;
+    if (!audio) return;
 
-    const cleanups: Array<() => void> = [];
-
-    for (const audio of elements) {
-      const isCurrentlyActive = () => audio === getActiveAudio();
-
-      const handleLoadStart = () => {
-        if (!isCurrentlyActive()) return;
-        if (isPlayingRef.current) setAudioStatus('loading');
-      };
-      const handleWaiting = () => {
-        if (!isCurrentlyActive()) return;
-        if (isPlayingRef.current) setAudioStatus('loading');
-      };
-      const handlePlaying = () => {
-        if (!isCurrentlyActive()) return;
-        ignorePauseEventRef.current = false;
-        isPlayingRef.current = true;
-        audioKeepAlive.acquire('quran');
-        setIsPlaying(true);
-        setAudioStatus('playing');
-        setAudioError(null);
-        setMediaSessionPlaybackState('playing');
-        preloadNextTrackOnStandby(currentIndexRef.current);
-      };
-      const handlePause = () => {
-        if (!isCurrentlyActive()) return;
-        if (!audio.ended && audio.paused && !ignorePauseEventRef.current) {
-          isPlayingRef.current = false;
-          audioKeepAlive.release('quran');
-          setIsPlaying(false);
-          setAudioStatus(playlistRef.current.length > 0 ? 'paused' : 'idle');
-          if (
-            playlistRef.current.length > 0 &&
-            speechPlayer.getSnapshot().status !== 'playing'
-          ) {
-            setMediaSessionPlaybackState('paused');
-          }
-        }
-      };
-      const handleTimeUpdate = () => {
-        if (!isCurrentlyActive()) return;
-        const cur = audio.currentTime || 0;
-        const dur = audio.duration || 0;
-        setProgress(cur);
-        setDuration(dur);
-        const now = Date.now();
-        if (dur > 0 && now - lastMediaPosSyncRef.current >= 900) {
-          lastMediaPosSyncRef.current = now;
-          updateMediaSessionPosition(dur, cur, audio.playbackRate || 1);
-        }
-      };
-      const handleLoadedMetadata = () => {
-        if (!isCurrentlyActive()) return;
-        const cur = audio.currentTime || 0;
-        const dur = audio.duration || 0;
-        setProgress(cur);
-        setDuration(dur);
-        if (dur > 0) {
-          lastMediaPosSyncRef.current = Date.now();
-          updateMediaSessionPosition(dur, cur, audio.playbackRate || 1);
-        }
-      };
-      const handleEnded = () => {
-        if (!isCurrentlyActive()) return;
-        const list = playlistRef.current;
-        const curIdx = currentIndexRef.current;
-        if (curIdx < list.length - 1) {
-          const nextIdx = curIdx + 1;
-          const nextTrack = list[nextIdx];
-          currentIndexRef.current = nextIdx;
-          isPlayingRef.current = true;
-          startTrackOnAudioElement(nextTrack, nextIdx, true);
-          setCurrentIndex(nextIdx);
-        } else if (isLoopingRef.current && list.length > 0) {
-          const nextTrack = list[0];
-          currentIndexRef.current = 0;
-          isPlayingRef.current = true;
-          startTrackOnAudioElement(nextTrack, 0, true);
-          setCurrentIndex(0);
-        } else {
-          audioKeepAlive.release('quran');
-          isPlayingRef.current = false;
-          setIsPlaying(false);
-          setAudioStatus('paused');
+    const handleLoadStart = () => {
+      if (isPlayingRef.current) setAudioStatus('loading');
+    };
+    const handleWaiting = () => {
+      if (isPlayingRef.current) setAudioStatus('loading');
+    };
+    const handlePlaying = () => {
+      ignorePauseEventRef.current = false;
+      isPlayingRef.current = true;
+      audioKeepAlive.acquire('quran');
+      setIsPlaying(true);
+      setAudioStatus('playing');
+      setAudioError(null);
+      setMediaSessionPlaybackState('playing');
+    };
+    const handlePause = () => {
+      if (!audio.ended && audio.paused && !ignorePauseEventRef.current) {
+        isPlayingRef.current = false;
+        audioKeepAlive.release('quran');
+        setIsPlaying(false);
+        setAudioStatus(playlistRef.current.length > 0 ? 'paused' : 'idle');
+        if (
+          playlistRef.current.length > 0 &&
+          speechPlayer.getSnapshot().status !== 'playing'
+        ) {
           setMediaSessionPlaybackState('paused');
         }
-      };
-      const handleError = () => {
-        if (!isCurrentlyActive()) return;
-        const list = playlistRef.current;
-        if (list.length === 0) return;
-        const curIdx = currentIndexRef.current;
-        const curTrack = list[curIdx];
-        const attemptAtError = playAttemptIdRef.current;
+      }
+    };
+    const handleTimeUpdate = () => {
+      const cur = audio.currentTime || 0;
+      const dur = audio.duration || 0;
+      setProgress(cur);
+      setDuration(dur);
+      const now = Date.now();
+      if (dur > 0 && now - lastMediaPosSyncRef.current >= 900) {
+        lastMediaPosSyncRef.current = now;
+        updateMediaSessionPosition(dur, cur, audio.playbackRate || 1);
+      }
+    };
+    const handleLoadedMetadata = () => {
+      const cur = audio.currentTime || 0;
+      const dur = audio.duration || 0;
+      setProgress(cur);
+      setDuration(dur);
+      if (dur > 0) {
+        lastMediaPosSyncRef.current = Date.now();
+        updateMediaSessionPosition(dur, cur, audio.playbackRate || 1);
+      }
+    };
+    const handleEnded = () => {
+      const list = playlistRef.current;
+      const curIdx = currentIndexRef.current;
+      if (curIdx < list.length - 1) {
+        const nextIdx = curIdx + 1;
+        const nextTrack = list[nextIdx];
+        currentIndexRef.current = nextIdx;
+        isPlayingRef.current = true;
+        startTrackOnAudioElement(nextTrack, nextIdx, true);
+        setCurrentIndex(nextIdx);
+      } else if (isLoopingRef.current && list.length > 0) {
+        const nextTrack = list[0];
+        currentIndexRef.current = 0;
+        isPlayingRef.current = true;
+        startTrackOnAudioElement(nextTrack, 0, true);
+        setCurrentIndex(0);
+      } else {
+        audioKeepAlive.release('quran');
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        setAudioStatus('paused');
+        setMediaSessionPlaybackState('paused');
+      }
+    };
+    const handleError = () => {
+      const list = playlistRef.current;
+      if (list.length === 0) return;
+      const curIdx = currentIndexRef.current;
+      const curTrack = list[curIdx];
 
-        if (curTrack && audio.src.startsWith('blob:') && curTrack.audioUrl) {
-          invalidateResolvedAudioUrl(curTrack.audioUrl);
-          ignorePauseEventRef.current = true;
-          audio.src = curTrack.audioUrl;
-          queueMicrotask(() => {
+      if (curTrack && audio.src.startsWith('blob:') && curTrack.audioUrl) {
+        invalidateResolvedAudioUrl(curTrack.audioUrl);
+        ignorePauseEventRef.current = true;
+        audio.src = curTrack.audioUrl;
+        if (isPlayingRef.current) {
+          audio.play().catch(() => {
             ignorePauseEventRef.current = false;
           });
-          if (isPlayingRef.current) {
-            audio.play().catch(() => {});
-          }
+        } else {
+          ignorePauseEventRef.current = false;
+        }
+        return;
+      }
+
+      if (curIdx < list.length - 1 && isPlayingRef.current) {
+        const nextIdx = curIdx + 1;
+        const nextTrack = list[nextIdx];
+        if (nextTrack) {
+          setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
+          currentIndexRef.current = nextIdx;
+          startTrackOnAudioElement(nextTrack, nextIdx, true);
+          setCurrentIndex(nextIdx);
           return;
         }
+      }
 
-        setAudioStatus('error');
-        setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
-        if (curIdx < list.length - 1) {
-          const nextIdx = curIdx + 1;
-          setTimeout(() => {
-            if (attemptAtError !== playAttemptIdRef.current || !isPlayingRef.current) return;
-            const nextTrack = playlistRef.current[nextIdx];
-            if (!nextTrack) return;
-            currentIndexRef.current = nextIdx;
-            startTrackOnAudioElement(nextTrack, nextIdx, true);
-            setCurrentIndex(nextIdx);
-          }, 300);
-        } else {
-          audioKeepAlive.release('quran');
-          isPlayingRef.current = false;
-          setIsPlaying(false);
-          setMediaSessionPlaybackState('paused');
-        }
-      };
+      audioKeepAlive.release('quran');
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      setAudioStatus('error');
+      setMediaSessionPlaybackState('paused');
+    };
 
-      audio.addEventListener('loadstart', handleLoadStart);
-      audio.addEventListener('waiting', handleWaiting);
-      audio.addEventListener('playing', handlePlaying);
-      audio.addEventListener('pause', handlePause);
-      audio.addEventListener('timeupdate', handleTimeUpdate);
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.addEventListener('ended', handleEnded);
-      audio.addEventListener('error', handleError);
-
-      cleanups.push(() => {
-        audio.removeEventListener('loadstart', handleLoadStart);
-        audio.removeEventListener('waiting', handleWaiting);
-        audio.removeEventListener('playing', handlePlaying);
-        audio.removeEventListener('pause', handlePause);
-        audio.removeEventListener('timeupdate', handleTimeUpdate);
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-        audio.removeEventListener('ended', handleEnded);
-        audio.removeEventListener('error', handleError);
-      });
-    }
+    audio.addEventListener('loadstart', handleLoadStart);
+    audio.addEventListener('waiting', handleWaiting);
+    audio.addEventListener('playing', handlePlaying);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('error', handleError);
 
     return () => {
-      for (const cleanup of cleanups) cleanup();
+      audio.removeEventListener('loadstart', handleLoadStart);
+      audio.removeEventListener('waiting', handleWaiting);
+      audio.removeEventListener('playing', handlePlaying);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('error', handleError);
     };
-  }, [getActiveAudio, preloadNextTrackOnStandby, startTrackOnAudioElement]);
+  }, [startTrackOnAudioElement]);
 
   const buildBismillahTrackForSurah = useCallback(
     (surahNum: number, targetAyahNum: number, isBanglaMode = false): AudioTrackItem => {
@@ -1361,6 +1217,7 @@ export default function App() {
     if (!audio || !currentTrack) return;
 
     if (isPlayingRef.current) {
+      ignorePauseEventRef.current = false;
       audio.pause();
       audioKeepAlive.release('quran');
       isPlayingRef.current = false;
@@ -1369,7 +1226,6 @@ export default function App() {
       setMediaSessionPlaybackState('paused');
     } else {
       speechPlayer.stop();
-      unlockStandbySlotOnGesture();
       audioKeepAlive.acquire('quran');
       setAudioError(null);
       isPlayingRef.current = true;
@@ -1412,6 +1268,7 @@ export default function App() {
       }
 
       const attemptId = ++playAttemptIdRef.current;
+      ignorePauseEventRef.current = false;
       setAudioStatus('loading');
       setMediaSessionMetadata({
         title: currentTrack.titleBn,
@@ -1423,9 +1280,7 @@ export default function App() {
         .play()
         .then(() => {
           if (attemptId !== playAttemptIdRef.current) return;
-          unlockedSlotsRef.current[activeSlotRef.current] = true;
           setAudioStatus('playing');
-          preloadNextTrackOnStandby(currentIndexRef.current);
         })
         .catch((err: unknown) => {
           if (attemptId !== playAttemptIdRef.current) return;
@@ -1444,23 +1299,14 @@ export default function App() {
     buildBismillahTrackForSurah,
     currentTrack,
     getActiveAudio,
-    preloadNextTrackOnStandby,
     shouldPrependBismillah,
     startTrackOnAudioElement,
-    unlockStandbySlotOnGesture,
   ]);
-
-  useEffect(() => {
-    if (isPlayingRef.current && playlistRef.current.length > 0) {
-      preloadNextTrackOnStandby(currentIndexRef.current);
-    }
-  }, [isLooping, preloadNextTrackOnStandby]);
 
   const handlePlayPlaylist = useCallback(
     (tracks: AudioTrackItem[], startIndex: number, _openVisual = false) => {
       if (tracks.length === 0) return;
       speechPlayer.stop();
-      unlockStandbySlotOnGesture();
       audioKeepAlive.acquire('quran');
       const safeIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
       const requestedTarget = tracks[safeIndex] || tracks[0];
@@ -1520,14 +1366,12 @@ export default function App() {
       buildBismillahTrackForSurah,
       shouldPrependBismillah,
       startTrackOnAudioElement,
-      unlockStandbySlotOnGesture,
     ]
   );
 
   const handlePrev = useCallback(() => {
     const nextIdx = Math.max(0, currentIndexRef.current - 1);
     const target = playlistRef.current[nextIdx];
-    unlockStandbySlotOnGesture();
     currentIndexRef.current = nextIdx;
     isPlayingRef.current = true;
     setCurrentIndex(nextIdx);
@@ -1536,12 +1380,11 @@ export default function App() {
     if (target) {
       startTrackOnAudioElement(target, nextIdx, true);
     }
-  }, [startTrackOnAudioElement, unlockStandbySlotOnGesture]);
+  }, [startTrackOnAudioElement]);
 
   const handleNext = useCallback(() => {
     const nextIdx = Math.min(playlistRef.current.length - 1, currentIndexRef.current + 1);
     const target = playlistRef.current[nextIdx];
-    unlockStandbySlotOnGesture();
     currentIndexRef.current = nextIdx;
     isPlayingRef.current = true;
     setCurrentIndex(nextIdx);
@@ -1550,7 +1393,7 @@ export default function App() {
     if (target) {
       startTrackOnAudioElement(target, nextIdx, true);
     }
-  }, [startTrackOnAudioElement, unlockStandbySlotOnGesture]);
+  }, [startTrackOnAudioElement]);
 
   const handleSeek = useCallback(
     (time: number) => {
@@ -1569,17 +1412,12 @@ export default function App() {
   const handleClosePlayer = useCallback(() => {
     playAttemptIdRef.current += 1;
     ignorePauseEventRef.current = true;
-    for (const el of [audioARef.current, audioBRef.current]) {
-      if (el) {
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-      }
+    const el = audioRef.current;
+    if (el) {
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
     }
-    queueMicrotask(() => {
-      ignorePauseEventRef.current = false;
-    });
-    preloadedStandbyRef.current = null;
     audioKeepAlive.release('quran');
     activeLoadedRemoteUrlRef.current = null;
     isPlayingRef.current = false;
@@ -1760,8 +1598,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
     <div className="bg-sanctuary-canvas min-h-screen text-[#0F1F1A] transition-colors dark:text-[#F0F5F3]">
-      <audio ref={audioARef} playsInline preload="auto" />
-      <audio ref={audioBRef} playsInline preload="auto" />
+      <audio ref={audioRef} playsInline preload="auto" />
       <OfflineIndicator />
       {/* Strict 3-Zone Frosted Glass Navigation Bar */}
       <header className="app-chrome-bar sticky top-0 z-30 border-b border-[#0D6E52]/10 bg-white/85 backdrop-blur-2xl transition-colors dark:border-[#E7C57B]/10 dark:bg-[#050E0C]/80">
