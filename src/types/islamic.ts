@@ -180,6 +180,7 @@ export interface AudioTrackItem {
   meaningBn?: string;
   englishMeaning?: string;
   audioUrl: string;
+  fallbackAudioUrl?: string;
   surah: number;
   ayah: number;
 }

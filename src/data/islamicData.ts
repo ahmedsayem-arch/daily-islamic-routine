@@ -166,6 +166,34 @@ export function buildEveryAyahUrl(folder: string, surah: number, ayah: number): 
   return `https://everyayah.com/data/${folder}/${s}${a}.mp3`;
 }
 
+const ISLAMIC_NETWORK_128_SUPPORTED = new Set<string>([
+  'ar.alafasy',
+  'ar.mahermuaiqly',
+  'ar.ahmedajamy',
+  'ar.muhammadjibreel',
+]);
+
+export function getGlobalAyahNumber(surah: number, ayah: number): number {
+  let offset = 0;
+  for (const s of ALL_SURAHS) {
+    if (s.number >= surah) break;
+    offset += s.ayahCount;
+  }
+  return offset + Math.max(1, ayah);
+}
+
+export function buildIslamicNetworkFallbackUrl(
+  alquranCloudEdition: string,
+  surah: number,
+  ayah: number
+): string {
+  const globalNum = getGlobalAyahNumber(surah, ayah);
+  const edition = ISLAMIC_NETWORK_128_SUPPORTED.has(alquranCloudEdition)
+    ? alquranCloudEdition
+    : 'ar.alafasy';
+  return `https://cdn.islamic.network/quran/audio/128/${edition}/${globalNum}.mp3`;
+}
+
 export const DEFAULT_ROUTINE_TASKS: RoutineTask[] = [
   {
     id: 'tahajjud',

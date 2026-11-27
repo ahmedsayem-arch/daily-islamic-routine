@@ -35,16 +35,46 @@ function isValidAudioResponse(res: Response | undefined | null): res is Response
 
 async function fetchPlayableAudioResponse(url: string): Promise<Response | null> {
   const isSameOrigin = url.startsWith('/');
-  try {
-    const res = await fetch(
-      url,
-      isSameOrigin ? { credentials: 'same-origin' } : { mode: 'cors' }
-    );
-    if (isValidAudioResponse(res)) {
-      return res;
+  if (!isSameOrigin || url.length <= 1800) {
+    try {
+      const res = await fetch(
+        url,
+        isSameOrigin ? { credentials: 'same-origin' } : { mode: 'cors' }
+      );
+      if (isValidAudioResponse(res)) {
+        return res;
+      }
+    } catch {
+      // network or CORS blocked
     }
-  } catch {
-    // network or CORS blocked
+  }
+
+  if (url.startsWith('/api/tts?')) {
+    try {
+      const qIndex = url.indexOf('?');
+      const params = new URLSearchParams(qIndex >= 0 ? url.slice(qIndex + 1) : '');
+      const text = params.get('text') || '';
+      if (text.trim()) {
+        const postRes = await fetch('/api/tts', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            lang: params.get('lang') || 'bn-BD',
+            voice: params.get('voice') || undefined,
+            rate: params.get('rate') || undefined,
+            pitch: params.get('pitch') || undefined,
+            expandHonorifics: params.get('expand') === '0' ? false : true,
+          }),
+        });
+        if (isValidAudioResponse(postRes)) {
+          return postRes;
+        }
+      }
+    } catch {
+      // ignore POST fallback failure
+    }
   }
   return null;
 }

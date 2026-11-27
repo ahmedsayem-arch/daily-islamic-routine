@@ -27,6 +27,7 @@ import {
 import {
   ALL_SURAHS,
   buildEveryAyahUrl,
+  buildIslamicNetworkFallbackUrl,
   QARI_RECITERS,
   QURAN_STUDY_IMG,
 } from '../data/islamicData';
@@ -702,6 +703,11 @@ export const QuranView: React.FC<QuranViewProps> = ({
         meaningBn: a.bengali,
         englishMeaning: a.english,
         audioUrl: a.audioUrl,
+        fallbackAudioUrl: buildIslamicNetworkFallbackUrl(
+          selectedQari.alquranCloudEdition,
+          selectedSurahNum,
+          a.numberInSurah
+        ),
         surah: selectedSurahNum,
         ayah: a.numberInSurah,
       });
@@ -742,6 +748,11 @@ export const QuranView: React.FC<QuranViewProps> = ({
       meaningBn: a.bengali,
       englishMeaning: a.english,
       audioUrl: a.audioUrl,
+      fallbackAudioUrl: buildIslamicNetworkFallbackUrl(
+        selectedQari.alquranCloudEdition,
+        selectedSurahNum,
+        a.numberInSurah
+      ),
       surah: selectedSurahNum,
       ayah: a.numberInSurah,
     }));
@@ -757,6 +768,11 @@ export const QuranView: React.FC<QuranViewProps> = ({
       meaningBn: f.bengali,
       englishMeaning: f.english,
       audioUrl: buildEveryAyahUrl(selectedQari.everyAyahFolder, f.surah, f.ayah),
+      fallbackAudioUrl: buildIslamicNetworkFallbackUrl(
+        selectedQari.alquranCloudEdition,
+        f.surah,
+        f.ayah
+      ),
       surah: f.surah,
       ayah: f.ayah,
     }));

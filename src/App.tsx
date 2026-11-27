@@ -7,6 +7,7 @@ import {
   BookOpen,
   BookText,
   CalendarCheck,
+  Loader2,
   Mic,
   Pause,
   Play,
@@ -29,6 +30,7 @@ import { TasbihModal } from './components/TasbihModal';
 import {
   ALL_SURAHS,
   buildEveryAyahUrl,
+  buildIslamicNetworkFallbackUrl,
   CITY_PRESETS,
   QARI_RECITERS,
 } from './data/islamicData';
@@ -666,11 +668,21 @@ export default function App() {
   const currentIndexRef = useRef<number>(0);
   const isLoopingRef = useRef<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
+  const SILENT_WAV_DATA_URI =
+    'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
   const activeLoadedRemoteUrlRef = useRef<string | null>(null);
   const playAttemptIdRef = useRef<number>(0);
+  const blobRetryAttemptRef = useRef<number>(-1);
   const offlineErrorAttemptRef = useRef<number>(-1);
+  const resolvingErrorAttemptRef = useRef<number>(-1);
+  const fallbackErrorAttemptRef = useRef<number>(-1);
   const consecutiveErrorsRef = useRef<number>(0);
   const ignorePauseEventRef = useRef<boolean>(false);
+  const isQuranAudioUnlockedRef = useRef<boolean>(false);
+  const isPrimingSilentRef = useRef<boolean>(false);
+  const silentPrimeTokenRef = useRef<number>(0);
+  const recoverAudioErrorRef = useRef<(attemptId: number) => void>(() => {});
   const skipNextTabScrollRef = useRef<boolean>(false);
   const activeTabRef = useRef<ActiveTab>(activeTab);
   const quranReaderStateRef = useRef(quranReaderState);
@@ -905,6 +917,65 @@ export default function App() {
     });
   }, []);
 
+  const primeAudioElementInternal = useCallback(() => {
+    const el = audioRef.current;
+    if (!el || isPlayingRef.current || isQuranAudioUnlockedRef.current) return;
+    if (el.src && !el.error && el.networkState !== HTMLMediaElement.NETWORK_NO_SOURCE) {
+      return;
+    }
+    const token = ++silentPrimeTokenRef.current;
+    const baseAttempt = playAttemptIdRef.current;
+    try {
+      isPrimingSilentRef.current = true;
+      el.src = SILENT_WAV_DATA_URI;
+      const p = el.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          isQuranAudioUnlockedRef.current = true;
+          if (silentPrimeTokenRef.current === token) {
+            isPrimingSilentRef.current = false;
+            if (playAttemptIdRef.current === baseAttempt && !isPlayingRef.current) {
+              el.pause();
+            }
+          }
+        }).catch(() => {
+          if (silentPrimeTokenRef.current === token) {
+            isPrimingSilentRef.current = false;
+          }
+        });
+      } else {
+        isQuranAudioUnlockedRef.current = true;
+        if (silentPrimeTokenRef.current === token) {
+          isPrimingSilentRef.current = false;
+        }
+      }
+    } catch {
+      if (silentPrimeTokenRef.current === token) {
+        isPrimingSilentRef.current = false;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const unlockOnce = () => {
+      primeAudioElementInternal();
+      if (isQuranAudioUnlockedRef.current) {
+        document.removeEventListener('pointerdown', unlockOnce, true);
+        document.removeEventListener('touchstart', unlockOnce, true);
+        document.removeEventListener('keydown', unlockOnce, true);
+      }
+    };
+    document.addEventListener('pointerdown', unlockOnce, { capture: true, passive: true });
+    document.addEventListener('touchstart', unlockOnce, { capture: true, passive: true });
+    document.addEventListener('keydown', unlockOnce, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener('pointerdown', unlockOnce, true);
+      document.removeEventListener('touchstart', unlockOnce, true);
+      document.removeEventListener('keydown', unlockOnce, true);
+    };
+  }, [primeAudioElementInternal]);
+
   const currentTrack = playlist[currentIndex] || null;
 
   const startTrackOnAudioElement = useCallback(
@@ -913,6 +984,11 @@ export default function App() {
       if (!targetEl) return;
 
       const attemptId = ++playAttemptIdRef.current;
+      silentPrimeTokenRef.current += 1;
+      isPrimingSilentRef.current = false;
+      setAudioError(null);
+      setProgress(0);
+      setDuration(0);
 
       // Auto-cache next 6 tracks & prewarm up to 16 cached tracks in RAM as blob: URLs
       const autoFetchUrls: string[] = [];
@@ -986,6 +1062,7 @@ export default function App() {
           .play()
           .then(() => {
             if (attemptId !== playAttemptIdRef.current) return;
+            isQuranAudioUnlockedRef.current = true;
             ignorePauseEventRef.current = false;
             setAudioStatus('playing');
           })
@@ -995,12 +1072,17 @@ export default function App() {
             const errName =
               err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
             if (errName === 'AbortError') return;
-            audioKeepAlive.release('quran');
-            isPlayingRef.current = false;
-            setIsPlaying(false);
-            setAudioStatus('paused');
-            setMediaSessionPlaybackState('paused');
-            setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
+            if (errName === 'NotAllowedError') {
+              audioKeepAlive.release('quran');
+              isPlayingRef.current = false;
+              setIsPlaying(false);
+              setAudioStatus('paused');
+              setMediaSessionPlaybackState('paused');
+              setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
+              return;
+            }
+            // Keep isPlayingRef.current = true and delegate to unified recovery/fallback pipeline
+            recoverAudioErrorRef.current(attemptId);
           });
       } else {
         ignorePauseEventRef.current = false;
@@ -1012,10 +1094,6 @@ export default function App() {
   useEffect(() => {
     const audio = getActiveAudio();
     if (!audio || !currentTrack) return;
-
-    setAudioError(null);
-    setProgress(0);
-    setDuration(0);
 
     if (activeLoadedRemoteUrlRef.current === currentTrack.audioUrl) {
       setMediaSessionMetadata({
@@ -1033,13 +1111,190 @@ export default function App() {
     const audio = audioRef.current;
     if (!audio) return;
 
+    const pauseForAutoplayBlock = () => {
+      audioKeepAlive.release('quran');
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      setAudioStatus('paused');
+      setMediaSessionPlaybackState('paused');
+      setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
+    };
+
+    const advanceOrError = (attemptId: number) => {
+      if (attemptId !== playAttemptIdRef.current) return;
+      const list = playlistRef.current;
+      const curIdx = currentIndexRef.current;
+      consecutiveErrorsRef.current += 1;
+      if (
+        consecutiveErrorsRef.current < 3 &&
+        curIdx < list.length - 1 &&
+        isPlayingRef.current
+      ) {
+        const nextIdx = curIdx + 1;
+        const nextTrack = list[nextIdx];
+        if (nextTrack) {
+          setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
+          currentIndexRef.current = nextIdx;
+          startTrackOnAudioElement(nextTrack, nextIdx, true);
+          setCurrentIndex(nextIdx);
+          return;
+        }
+      }
+      setAudioError('অডিও লোড করা যাচ্ছে না। ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।');
+      audioKeepAlive.release('quran');
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      setAudioStatus('error');
+      setMediaSessionPlaybackState('paused');
+    };
+
+    const tryFallbackOrAdvance = (attemptId: number) => {
+      if (attemptId !== playAttemptIdRef.current || audioRef.current !== audio) return;
+      if (!isPlayingRef.current) return;
+      const list = playlistRef.current;
+      const curTrack = list[currentIndexRef.current];
+      const fbUrl = curTrack?.fallbackAudioUrl;
+      if (
+        fbUrl &&
+        fbUrl !== curTrack.audioUrl &&
+        fallbackErrorAttemptRef.current !== attemptId
+      ) {
+        fallbackErrorAttemptRef.current = attemptId;
+        resolvingErrorAttemptRef.current = attemptId;
+        ignorePauseEventRef.current = true;
+        audio.src = getFastPlayableAudioUrlSync(fbUrl);
+        audio
+          .play()
+          .then(() => {
+            if (resolvingErrorAttemptRef.current === attemptId) {
+              resolvingErrorAttemptRef.current = -1;
+            }
+          })
+          .catch((err: unknown) => {
+            const errName =
+              err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+            if (errName === 'AbortError') return;
+            if (errName === 'NotAllowedError') {
+              if (resolvingErrorAttemptRef.current === attemptId) {
+                resolvingErrorAttemptRef.current = -1;
+              }
+              pauseForAutoplayBlock();
+              return;
+            }
+            void resolveAndPrewarmAudioUrl(fbUrl, true).then((resolvedFb) => {
+              if (resolvingErrorAttemptRef.current === attemptId) {
+                resolvingErrorAttemptRef.current = -1;
+              }
+              if (attemptId !== playAttemptIdRef.current || audioRef.current !== audio) {
+                return;
+              }
+              if (!isPlayingRef.current) return;
+              if (resolvedFb !== fbUrl) {
+                ignorePauseEventRef.current = true;
+                audio.src = resolvedFb;
+                audio.play().catch((fbErr: unknown) => {
+                  const fbErrName =
+                    fbErr && typeof fbErr === 'object'
+                      ? (fbErr as { name?: string }).name
+                      : undefined;
+                  if (fbErrName === 'AbortError') return;
+                  if (fbErrName === 'NotAllowedError') {
+                    pauseForAutoplayBlock();
+                    return;
+                  }
+                  advanceOrError(attemptId);
+                });
+                return;
+              }
+              advanceOrError(attemptId);
+            });
+          });
+        return;
+      }
+      advanceOrError(attemptId);
+    };
+
+    const recoverAudioError = (attemptId: number) => {
+      if (attemptId !== playAttemptIdRef.current || audioRef.current !== audio) return;
+      if (resolvingErrorAttemptRef.current === attemptId) return;
+      const list = playlistRef.current;
+      if (list.length === 0 || !isPlayingRef.current) return;
+      const curTrack = list[currentIndexRef.current];
+
+      if (
+        curTrack &&
+        audio.src.startsWith('blob:') &&
+        curTrack.audioUrl &&
+        blobRetryAttemptRef.current !== attemptId
+      ) {
+        blobRetryAttemptRef.current = attemptId;
+        invalidateResolvedAudioUrl(curTrack.audioUrl);
+        ignorePauseEventRef.current = true;
+        audio.src = curTrack.audioUrl;
+        audio.play().catch((err: unknown) => {
+          const errName =
+            err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+          if (errName === 'AbortError') return;
+          if (errName === 'NotAllowedError') {
+            pauseForAutoplayBlock();
+            return;
+          }
+          recoverAudioError(attemptId);
+        });
+        return;
+      }
+
+      if (
+        curTrack &&
+        curTrack.audioUrl &&
+        offlineErrorAttemptRef.current !== attemptId
+      ) {
+        offlineErrorAttemptRef.current = attemptId;
+        resolvingErrorAttemptRef.current = attemptId;
+        void resolveAndPrewarmAudioUrl(curTrack.audioUrl, true).then((resolved) => {
+          if (resolvingErrorAttemptRef.current === attemptId) {
+            resolvingErrorAttemptRef.current = -1;
+          }
+          if (attemptId !== playAttemptIdRef.current || audioRef.current !== audio) {
+            return;
+          }
+          if (!isPlayingRef.current) return;
+          if (resolved !== curTrack.audioUrl) {
+            ignorePauseEventRef.current = true;
+            audio.src = resolved;
+            audio.play().catch((err: unknown) => {
+              const errName =
+                err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+              if (errName === 'AbortError') return;
+              if (errName === 'NotAllowedError') {
+                pauseForAutoplayBlock();
+                return;
+              }
+              tryFallbackOrAdvance(attemptId);
+            });
+            return;
+          }
+          tryFallbackOrAdvance(attemptId);
+        });
+        return;
+      }
+
+      tryFallbackOrAdvance(attemptId);
+    };
+
+    recoverAudioErrorRef.current = recoverAudioError;
+
     const handleLoadStart = () => {
+      if (isPrimingSilentRef.current) return;
       if (isPlayingRef.current) setAudioStatus('loading');
     };
     const handleWaiting = () => {
+      if (isPrimingSilentRef.current) return;
       if (isPlayingRef.current) setAudioStatus('loading');
     };
     const handlePlaying = () => {
+      if (isPrimingSilentRef.current) return;
+      isQuranAudioUnlockedRef.current = true;
       ignorePauseEventRef.current = false;
       consecutiveErrorsRef.current = 0;
       isPlayingRef.current = true;
@@ -1050,6 +1305,7 @@ export default function App() {
       setMediaSessionPlaybackState('playing');
     };
     const handlePause = () => {
+      if (isPrimingSilentRef.current) return;
       if (!audio.ended && audio.paused && !ignorePauseEventRef.current) {
         isPlayingRef.current = false;
         audioKeepAlive.release('quran');
@@ -1064,6 +1320,7 @@ export default function App() {
       }
     };
     const handleTimeUpdate = () => {
+      if (isPrimingSilentRef.current) return;
       const cur = audio.currentTime || 0;
       const dur = audio.duration || 0;
       setProgress(cur);
@@ -1075,6 +1332,7 @@ export default function App() {
       }
     };
     const handleLoadedMetadata = () => {
+      if (isPrimingSilentRef.current) return;
       const cur = audio.currentTime || 0;
       const dur = audio.duration || 0;
       setProgress(cur);
@@ -1085,6 +1343,7 @@ export default function App() {
       }
     };
     const handleEnded = () => {
+      if (isPrimingSilentRef.current) return;
       const list = playlistRef.current;
       const curIdx = currentIndexRef.current;
       if (curIdx < list.length - 1) {
@@ -1109,82 +1368,9 @@ export default function App() {
       }
     };
     const handleError = () => {
-      const list = playlistRef.current;
-      if (list.length === 0) return;
-      const curIdx = currentIndexRef.current;
-      const curTrack = list[curIdx];
-      const attemptId = playAttemptIdRef.current;
-
-      const advanceOrError = () => {
-        if (attemptId !== playAttemptIdRef.current) return;
-        consecutiveErrorsRef.current += 1;
-        if (
-          consecutiveErrorsRef.current < 3 &&
-          curIdx < list.length - 1 &&
-          isPlayingRef.current
-        ) {
-          const nextIdx = curIdx + 1;
-          const nextTrack = list[nextIdx];
-          if (nextTrack) {
-            setAudioError('এই আয়াতের অডিও লোড করা যায়নি, পরবর্তী আয়াতে যাওয়া হচ্ছে...');
-            currentIndexRef.current = nextIdx;
-            startTrackOnAudioElement(nextTrack, nextIdx, true);
-            setCurrentIndex(nextIdx);
-            return;
-          }
-        }
-        setAudioError('অডিও লোড করা যাচ্ছে না। ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।');
-        audioKeepAlive.release('quran');
-        isPlayingRef.current = false;
-        setIsPlaying(false);
-        setAudioStatus('error');
-        setMediaSessionPlaybackState('paused');
-      };
-
-      if (curTrack && audio.src.startsWith('blob:') && curTrack.audioUrl) {
-        invalidateResolvedAudioUrl(curTrack.audioUrl);
-        ignorePauseEventRef.current = true;
-        audio.src = curTrack.audioUrl;
-        if (isPlayingRef.current) {
-          audio.play().catch(() => {
-            ignorePauseEventRef.current = false;
-          });
-        } else {
-          ignorePauseEventRef.current = false;
-        }
-        return;
-      }
-
-      if (
-        curTrack &&
-        curTrack.audioUrl &&
-        offlineErrorAttemptRef.current !== attemptId
-      ) {
-        offlineErrorAttemptRef.current = attemptId;
-        void resolveAndPrewarmAudioUrl(curTrack.audioUrl, true).then((resolved) => {
-          if (attemptId !== playAttemptIdRef.current || targetElCheck() !== audio) {
-            return;
-          }
-          if (resolved !== curTrack.audioUrl && isPlayingRef.current) {
-            ignorePauseEventRef.current = true;
-            audio.src = resolved;
-            audio.play().catch(() => {
-              ignorePauseEventRef.current = false;
-              advanceOrError();
-            });
-            return;
-          }
-          advanceOrError();
-        });
-        return;
-      }
-
-      advanceOrError();
+      if (isPrimingSilentRef.current) return;
+      recoverAudioError(playAttemptIdRef.current);
     };
-
-    function targetElCheck() {
-      return audioRef.current;
-    }
 
     audio.addEventListener('loadstart', handleLoadStart);
     audio.addEventListener('waiting', handleWaiting);
@@ -1196,6 +1382,7 @@ export default function App() {
     audio.addEventListener('error', handleError);
 
     return () => {
+      recoverAudioErrorRef.current = () => {};
       audio.removeEventListener('loadstart', handleLoadStart);
       audio.removeEventListener('waiting', handleWaiting);
       audio.removeEventListener('playing', handlePlaying);
@@ -1219,6 +1406,7 @@ export default function App() {
         arabic: 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
         meaningBn: 'পরম করুণাময় অসীম দয়ালু আল্লাহর নামে শুরু করছি',
         audioUrl: buildEveryAyahUrl(qari.everyAyahFolder, 1, 1),
+        fallbackAudioUrl: buildIslamicNetworkFallbackUrl(qari.alquranCloudEdition, 1, 1),
         surah: surahNum,
         ayah: 0,
       };
@@ -1339,6 +1527,7 @@ export default function App() {
         .play()
         .then(() => {
           if (attemptId !== playAttemptIdRef.current) return;
+          isQuranAudioUnlockedRef.current = true;
           setAudioStatus('playing');
         })
         .catch((err: unknown) => {
@@ -1346,12 +1535,16 @@ export default function App() {
           const errName =
             err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
           if (errName === 'AbortError') return;
-          audioKeepAlive.release('quran');
-          setAudioError('অডিও স্ট্রিম সংযোগ করা যায়নি');
-          isPlayingRef.current = false;
-          setIsPlaying(false);
-          setAudioStatus('error');
-          setMediaSessionPlaybackState('paused');
+          if (errName === 'NotAllowedError') {
+            audioKeepAlive.release('quran');
+            setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            setAudioStatus('paused');
+            setMediaSessionPlaybackState('paused');
+            return;
+          }
+          recoverAudioErrorRef.current(attemptId);
         });
     }
   }, [
@@ -1363,34 +1556,9 @@ export default function App() {
   ]);
 
   const handlePrimeAudio = useCallback(() => {
-    const el = audioRef.current;
     audioKeepAlive.acquire('quran');
-    if (!el || isPlayingRef.current) return;
-    if (el.src && !el.error && el.networkState !== HTMLMediaElement.NETWORK_NO_SOURCE) {
-      return;
-    }
-    const silentAttempt = playAttemptIdRef.current;
-    try {
-      ignorePauseEventRef.current = true;
-      el.src =
-        'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-      const p = el.play();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          if (playAttemptIdRef.current === silentAttempt && !isPlayingRef.current) {
-            el.pause();
-          }
-          ignorePauseEventRef.current = false;
-        }).catch(() => {
-          ignorePauseEventRef.current = false;
-        });
-      } else {
-        ignorePauseEventRef.current = false;
-      }
-    } catch {
-      ignorePauseEventRef.current = false;
-    }
-  }, []);
+    primeAudioElementInternal();
+  }, [primeAudioElementInternal]);
 
   const handlePlayPlaylist = useCallback(
     (tracks: AudioTrackItem[], startIndex: number, _openVisual = false) => {
@@ -2107,7 +2275,11 @@ export default function App() {
               }
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#D4A853]/20 text-[#F6DC9B]">
-                <Volume2 className="h-4 w-4" />
+                {speechSnap.status === 'playing' && speechSnap.isBuffering ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Volume2 className="h-4 w-4" />
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">

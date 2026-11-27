@@ -34,56 +34,104 @@ async function sanitizeAudioCache(cacheName: string) {
   }
 }
 
-if (import.meta.env.DEV) {
-  const cleanupDevSw = async () => {
-    let hadController = false;
-    let unregisteredAny = false;
-    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      hadController = Boolean(navigator.serviceWorker.controller);
-      try {
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        for (const reg of registrations) {
-          const ok = await reg.unregister().catch(() => false);
-          if (ok) unregisteredAny = true;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    if (typeof window !== 'undefined' && 'caches' in window) {
-      try {
-        const keys = await window.caches.keys();
-        await Promise.all(
-          keys
-            .filter((k) => k.startsWith('workbox-') || k === 'noor-male-tts-cache')
-            .map((k) => window.caches.delete(k).catch(() => false))
-        );
-      } catch {
-        // ignore
-      }
-      await sanitizeAudioCache('quran-audio-cache');
-      await sanitizeAudioCache('noor-male-tts-cache-v2');
-    }
+async function cleanupDevSw(): Promise<boolean> {
+  let hadController = false;
+  let unregisteredAny = false;
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    hadController = Boolean(navigator.serviceWorker.controller);
     try {
-      if (
-        (hadController || unregisteredAny) &&
-        !window.sessionStorage.getItem('noor_dev_sw_healed_v1')
-      ) {
-        window.sessionStorage.setItem('noor_dev_sw_healed_v1', '1');
-        window.location.reload();
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        // Trigger kill-switch /dev-sw.js update first so active controller calls skipWaiting() & claims
+        await reg.update().catch(() => {});
+        const ok = await reg.unregister().catch(() => false);
+        if (ok) unregisteredAny = true;
       }
     } catch {
       // ignore
     }
-  };
-  void cleanupDevSw();
+  }
+  if (typeof window !== 'undefined' && 'caches' in window) {
+    try {
+      const keys = await window.caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => k.startsWith('workbox-') || k === 'noor-male-tts-cache')
+          .map((k) => window.caches.delete(k).catch(() => false))
+      );
+    } catch {
+      // ignore
+    }
+    await sanitizeAudioCache('quran-audio-cache');
+    await sanitizeAudioCache('noor-male-tts-cache-v2');
+  }
+  try {
+    if (hadController || unregisteredAny) {
+      const attempts = Number(
+        window.sessionStorage.getItem('noor_dev_sw_healed_v2') || '0'
+      );
+      if (attempts < 3) {
+        window.sessionStorage.setItem('noor_dev_sw_healed_v2', String(attempts + 1));
+        window.location.reload();
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+function mountApp() {
+  createRoot(document.getElementById('root')!).render(<App />);
+}
+
+if (import.meta.env.DEV) {
+  const hasSwController =
+    typeof navigator !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    Boolean(navigator.serviceWorker.controller);
+
+  if (hasSwController) {
+    void cleanupDevSw().then((reloading) => {
+      if (!reloading) mountApp();
+    });
+  } else {
+    void cleanupDevSw();
+    mountApp();
+  }
 } else {
   if (typeof window !== 'undefined' && 'caches' in window) {
     void window.caches.delete('noor-male-tts-cache').catch(() => {});
     void sanitizeAudioCache('quran-audio-cache');
     void sanitizeAudioCache('noor-male-tts-cache-v2');
   }
-  registerSW({immediate: true});
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      try {
+        const count = Number(
+          window.sessionStorage.getItem('noor_prod_sw_reloaded_v2') || '0'
+        );
+        if (count < 2) {
+          refreshing = true;
+          window.sessionStorage.setItem('noor_prod_sw_reloaded_v2', String(count + 1));
+          window.location.reload();
+        }
+      } catch {
+        // ignore
+      }
+    });
+  }
+  const updateSW = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      void updateSW(true);
+    },
+    onRegisteredSW(_swUrl, reg) {
+      reg?.update().catch(() => {});
+    },
+  });
+  mountApp();
 }
-
-createRoot(document.getElementById('root')!).render(<App />);

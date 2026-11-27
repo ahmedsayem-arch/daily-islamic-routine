@@ -1,6 +1,7 @@
 import {
   ALL_SURAHS,
   buildEveryAyahUrl,
+  buildIslamicNetworkFallbackUrl,
   CURATED_HADITHS,
 } from '../data/islamicData';
 import {
@@ -276,6 +277,11 @@ export async function buildPlaylistFromRefs(
       meaningBn: cached?.bengali.get(ref.ayah),
       englishMeaning: cached?.english.get(ref.ayah),
       audioUrl: buildEveryAyahUrl(qari.everyAyahFolder, ref.surah, ref.ayah),
+      fallbackAudioUrl: buildIslamicNetworkFallbackUrl(
+        qari.alquranCloudEdition,
+        ref.surah,
+        ref.ayah
+      ),
       surah: ref.surah,
       ayah: ref.ayah,
     };
