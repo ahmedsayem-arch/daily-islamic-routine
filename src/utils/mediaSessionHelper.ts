@@ -104,6 +104,14 @@ export function registerMediaSessionHandlers(
     callbacks.onNext ? () => callbacks.onNext?.() : null
   );
   setHandler(
+    'seekbackward',
+    callbacks.onPrev ? () => callbacks.onPrev?.() : null
+  );
+  setHandler(
+    'seekforward',
+    callbacks.onNext ? () => callbacks.onNext?.() : null
+  );
+  setHandler(
     'seekto',
     callbacks.onSeekTo
       ? (details) => {

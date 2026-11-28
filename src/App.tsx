@@ -679,6 +679,10 @@ export default function App() {
   const fallbackErrorAttemptRef = useRef<number>(-1);
   const consecutiveErrorsRef = useRef<number>(0);
   const ignorePauseEventRef = useRef<boolean>(false);
+  const userPausedQuranAtRef = useRef<number>(0);
+  const lastVisibilityHiddenAtRef = useRef<number>(0);
+  const screenOffResumeCountRef = useRef<number>(0);
+  const syncQuranMediaSessionRef = useRef<() => void>(() => {});
   const isQuranAudioUnlockedRef = useRef<boolean>(false);
   const isPrimingSilentRef = useRef<boolean>(false);
   const silentPrimeTokenRef = useRef<number>(0);
@@ -792,7 +796,30 @@ export default function App() {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         const now = Date.now();
+        lastVisibilityHiddenAtRef.current = now;
         touchActive();
+        if (isPlayingRef.current) {
+          audioKeepAlive.pulse();
+          setMediaSessionPlaybackState('playing');
+          syncQuranMediaSessionRef.current();
+          const snapAttempt = playAttemptIdRef.current;
+          for (const delay of [160, 550]) {
+            window.setTimeout(() => {
+              if (
+                snapAttempt !== playAttemptIdRef.current ||
+                !isPlayingRef.current ||
+                Date.now() - userPausedQuranAtRef.current < 1500
+              ) {
+                return;
+              }
+              const el = audioRef.current;
+              if (el && el.paused && !el.ended && el.src) {
+                audioKeepAlive.pulse();
+                void el.play().catch(() => {});
+              }
+            }, delay);
+          }
+        }
         if (!isPlayingRef.current && speechPlayer.getSnapshot().status !== 'playing') {
           lastAwayAtRef.current = now;
           try {
@@ -900,6 +927,7 @@ export default function App() {
 
   useEffect(() => {
     return speechPlayer.onBeforeStart(() => {
+      userPausedQuranAtRef.current = Date.now();
       const el = audioRef.current;
       if (el && !el.paused) {
         ignorePauseEventRef.current = true;
@@ -918,6 +946,7 @@ export default function App() {
   }, []);
 
   const primeAudioElementInternal = useCallback(() => {
+    audioKeepAlive.primeOnGesture();
     const el = audioRef.current;
     if (!el || isPlayingRef.current || isQuranAudioUnlockedRef.current) return;
     if (el.src && !el.error && el.networkState !== HTMLMediaElement.NETWORK_NO_SOURCE) {
@@ -990,21 +1019,23 @@ export default function App() {
       setProgress(0);
       setDuration(0);
 
-      // Auto-cache next 6 tracks & prewarm up to 16 cached tracks in RAM as blob: URLs
+      // Auto-cache next 12 tracks & prewarm up to 24 cached tracks in RAM as blob: URLs
       const autoFetchUrls: string[] = [];
       const prewarmUrls: string[] = [track.audioUrl];
-      for (let offset = 1; offset <= 16; offset += 1) {
+      for (let offset = 1; offset <= 24; offset += 1) {
         const nextUrl = playlistRef.current[idx + offset]?.audioUrl;
         if (!nextUrl) continue;
         prewarmUrls.push(nextUrl);
-        if (offset <= 6) autoFetchUrls.push(nextUrl);
+        if (offset <= 12) autoFetchUrls.push(nextUrl);
       }
       prewarmUpcomingAudioUrls(prewarmUrls);
+      const fastSrc = getFastPlayableAudioUrlSync(track.audioUrl);
+      if (fastSrc === track.audioUrl) {
+        autoFetchUrls.unshift(track.audioUrl);
+      }
       if (autoFetchUrls.length > 0) {
         prefetchAndCacheAudioUrls(autoFetchUrls);
       }
-
-      const fastSrc = getFastPlayableAudioUrlSync(track.audioUrl);
       activeLoadedRemoteUrlRef.current = track.audioUrl;
 
       let resolvedFastSrc = fastSrc;
@@ -1036,6 +1067,7 @@ export default function App() {
         artist: track.subtitleBn,
         album: 'Daily Islamic Routine',
       });
+      syncQuranMediaSessionRef.current();
 
       if (fastSrc === track.audioUrl) {
         void resolveAndPrewarmAudioUrl(track.audioUrl).then((resolved) => {
@@ -1064,15 +1096,16 @@ export default function App() {
             if (attemptId !== playAttemptIdRef.current) return;
             isQuranAudioUnlockedRef.current = true;
             ignorePauseEventRef.current = false;
+            screenOffResumeCountRef.current = 0;
             setAudioStatus('playing');
           })
           .catch((err: unknown) => {
             if (attemptId !== playAttemptIdRef.current) return;
-            ignorePauseEventRef.current = false;
             const errName =
               err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
             if (errName === 'AbortError') return;
             if (errName === 'NotAllowedError') {
+              ignorePauseEventRef.current = false;
               audioKeepAlive.release('quran');
               isPlayingRef.current = false;
               setIsPlaying(false);
@@ -1081,7 +1114,7 @@ export default function App() {
               setAudioError('অডিও চালু করতে প্লে বাটনে আবার ট্যাপ করুন');
               return;
             }
-            // Keep isPlayingRef.current = true and delegate to unified recovery/fallback pipeline
+            // Keep ignorePauseEventRef true & delegate to unified recovery/fallback pipeline
             recoverAudioErrorRef.current(attemptId);
           });
       } else {
@@ -1112,6 +1145,7 @@ export default function App() {
     if (!audio) return;
 
     const pauseForAutoplayBlock = () => {
+      ignorePauseEventRef.current = false;
       audioKeepAlive.release('quran');
       isPlayingRef.current = false;
       setIsPlaying(false);
@@ -1140,6 +1174,7 @@ export default function App() {
           return;
         }
       }
+      ignorePauseEventRef.current = false;
       setAudioError('অডিও লোড করা যাচ্ছে না। ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।');
       audioKeepAlive.release('quran');
       isPlayingRef.current = false;
@@ -1297,6 +1332,7 @@ export default function App() {
       isQuranAudioUnlockedRef.current = true;
       ignorePauseEventRef.current = false;
       consecutiveErrorsRef.current = 0;
+      screenOffResumeCountRef.current = 0;
       isPlayingRef.current = true;
       audioKeepAlive.acquire('quran');
       setIsPlaying(true);
@@ -1307,6 +1343,25 @@ export default function App() {
     const handlePause = () => {
       if (isPrimingSilentRef.current) return;
       if (!audio.ended && audio.paused && !ignorePauseEventRef.current) {
+        const isHidden =
+          typeof document !== 'undefined' && document.visibilityState === 'hidden';
+        if (
+          isHidden &&
+          isPlayingRef.current &&
+          Date.now() - userPausedQuranAtRef.current > 1500 &&
+          Date.now() - lastVisibilityHiddenAtRef.current < 2500 &&
+          screenOffResumeCountRef.current < 2
+        ) {
+          screenOffResumeCountRef.current += 1;
+          audioKeepAlive.pulse();
+          void audio.play().catch((err: unknown) => {
+            const errName =
+              err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+            if (errName === 'AbortError') return;
+            pauseForAutoplayBlock();
+          });
+          return;
+        }
         isPlayingRef.current = false;
         audioKeepAlive.release('quran');
         setIsPlaying(false);
@@ -1464,6 +1519,7 @@ export default function App() {
     if (!audio || !currentTrack) return;
 
     if (isPlayingRef.current) {
+      userPausedQuranAtRef.current = Date.now();
       ignorePauseEventRef.current = false;
       audio.pause();
       audioKeepAlive.release('quran');
@@ -1473,6 +1529,7 @@ export default function App() {
       setMediaSessionPlaybackState('paused');
     } else {
       speechPlayer.stop();
+      screenOffResumeCountRef.current = 0;
       audioKeepAlive.acquire('quran');
       setAudioError(null);
       isPlayingRef.current = true;
@@ -1669,6 +1726,7 @@ export default function App() {
   );
 
   const handleClosePlayer = useCallback(() => {
+    userPausedQuranAtRef.current = Date.now();
     playAttemptIdRef.current += 1;
     ignorePauseEventRef.current = true;
     const el = audioRef.current;
@@ -1703,14 +1761,20 @@ export default function App() {
         if (!isPlayingRef.current) handleTogglePlay();
       },
       onPause: () => {
+        userPausedQuranAtRef.current = Date.now();
         if (isPlayingRef.current) handleTogglePlay();
       },
       onPrev: idx > 0 ? handlePrev : undefined,
       onNext: idx < list.length - 1 ? handleNext : undefined,
       onSeekTo: handleSeek,
-      onStop: handleClosePlayer,
+      onStop: () => {
+        userPausedQuranAtRef.current = Date.now();
+        handleClosePlayer();
+      },
     });
   }, [handleTogglePlay, handlePrev, handleNext, handleSeek, handleClosePlayer]);
+
+  syncQuranMediaSessionRef.current = syncQuranMediaSessionHandlers;
 
   useEffect(() => {
     if (playlist.length === 0) return;

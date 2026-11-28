@@ -35,48 +35,63 @@ function isValidAudioResponse(res: Response | undefined | null): res is Response
 
 async function fetchPlayableAudioResponse(url: string): Promise<Response | null> {
   const isSameOrigin = url.startsWith('/');
-  if (!isSameOrigin || url.length <= 1800) {
-    try {
-      const res = await fetch(
-        url,
-        isSameOrigin ? { credentials: 'same-origin' } : { mode: 'cors' }
-      );
-      if (isValidAudioResponse(res)) {
-        return res;
-      }
-    } catch {
-      // network or CORS blocked
-    }
-  }
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer =
+    controller && typeof setTimeout !== 'undefined'
+      ? setTimeout(() => controller.abort(), 10000)
+      : null;
 
-  if (url.startsWith('/api/tts?')) {
-    try {
-      const qIndex = url.indexOf('?');
-      const params = new URLSearchParams(qIndex >= 0 ? url.slice(qIndex + 1) : '');
-      const text = params.get('text') || '';
-      if (text.trim()) {
-        const postRes = await fetch('/api/tts', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text,
-            lang: params.get('lang') || 'bn-BD',
-            voice: params.get('voice') || undefined,
-            rate: params.get('rate') || undefined,
-            pitch: params.get('pitch') || undefined,
-            expandHonorifics: params.get('expand') === '0' ? false : true,
-          }),
-        });
-        if (isValidAudioResponse(postRes)) {
-          return postRes;
+  try {
+    if (!isSameOrigin || url.length <= 1800) {
+      try {
+        const res = await fetch(
+          url,
+          isSameOrigin
+            ? { credentials: 'same-origin', signal: controller?.signal }
+            : { mode: 'cors', signal: controller?.signal }
+        );
+        if (isValidAudioResponse(res)) {
+          return res;
         }
+      } catch {
+        // network or CORS blocked
       }
-    } catch {
-      // ignore POST fallback failure
+    }
+
+    if (url.startsWith('/api/tts?')) {
+      try {
+        const qIndex = url.indexOf('?');
+        const params = new URLSearchParams(qIndex >= 0 ? url.slice(qIndex + 1) : '');
+        const text = params.get('text') || '';
+        if (text.trim()) {
+          const postRes = await fetch('/api/tts', {
+            method: 'POST',
+            credentials: 'same-origin',
+            signal: controller?.signal,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text,
+              lang: params.get('lang') || 'bn-BD',
+              voice: params.get('voice') || undefined,
+              rate: params.get('rate') || undefined,
+              pitch: params.get('pitch') || undefined,
+              expandHonorifics: params.get('expand') === '0' ? false : true,
+            }),
+          });
+          if (isValidAudioResponse(postRes)) {
+            return postRes;
+          }
+        }
+      } catch {
+        // ignore POST fallback failure
+      }
+    }
+    return null;
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
     }
   }
-  return null;
 }
 
 export function isCacheStorageSupported(): boolean {
